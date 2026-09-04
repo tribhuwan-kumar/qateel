@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "\n\t\t\t\tSELECT gid, source_uri, options, status, kind, is_resume_supported, info_hash, user_id\n\t\t\t\tFROM download_history\n\t\t\t\tWHERE status IN ('active', 'waiting', 'paused', 'seeding')\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "gid",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "source_uri",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "options",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "status",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "kind",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "is_resume_supported",
+        "ordinal": 5,
+        "type_info": "Bool"
+      },
+      {
+        "name": "info_hash",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "user_id",
+        "ordinal": 7,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "bd2e4e413d0f4c695015683f3a579786a251b0bc6d7792a513b4cae50ebd9930"
+}

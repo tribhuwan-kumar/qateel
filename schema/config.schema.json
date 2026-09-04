@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Config",
+  "description": "Top-level configuration for the application. All fields are optional and may be overridden by CLI arguments or built-in defaults.",
+  "type": "object",
+  "properties": {
+    "app": {
+      "description": "Qateel application settings. Missing values fall back to the built-in defaults.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AppConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "aria2": {
+      "description": "Aria2 specific settings. Missing values fall back to the built-in defaults: host = \"ws://127.0.0.1\", port = \"6800\".",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Aria2Config"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "server": {
+      "description": "Qateel server related settings. Missing values fall back to the built-in defaults: port = 8080, host = \"0.0.0.0\", verbose = false.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ServerConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "tls": {
+      "description": "TLS configuration. Both certificate and key are optional; if omitted, TLS is disabled unless provided through CLI arguments.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TlsConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "AppConfig": {
+      "description": "Qateel application configuration.",
+      "type": "object",
+      "properties": {
+        "data_dir": {
+          "description": "Directory used to store application data. Default: the value returned by default_data_dir().",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "Aria2Config": {
+      "description": "Aria2 configuration.",
+      "type": "object",
+      "properties": {
+        "dir": {
+          "description": "Aria2 directory to store downloaded content.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "host": {
+          "description": "Aria2 host address. Default: \"ws://127.0.0.1\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "port": {
+          "description": "Aria2 JSON-RPC port. Default: \"6800\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "secret": {
+          "description": "Aria2 JSON-RPC secret token. Optional; no default value. You must have to set a Aria2 secret value.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ServerConfig": {
+      "description": "Qateel server configuration.",
+      "type": "object",
+      "properties": {
+        "cors_origins": {
+          "description": "Allowed CORS origins. Example: [\"http://localhost:5173\", \"http://127.0.0.1:5173\"].",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "host": {
+          "description": "Host address to bind to. Default: \"0.0.0.0\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "port": {
+          "description": "Port to bind to. Default: 8080.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "verbose": {
+          "description": "Enable verbose logging. Default: false.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "TlsConfig": {
+      "description": "TLS configuration for HTTPS-related settings.",
+      "type": "object",
+      "properties": {
+        "cert": {
+          "description": "Path to the PEM-encoded certificate file. Optional; no default value.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "description": "Path to the PEM-encoded private key file. Optional; no default value.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

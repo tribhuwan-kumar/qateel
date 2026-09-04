@@ -1,0 +1,79 @@
+@font-face {
+  font-family: "Red Hat Text";
+	font-weight: 400;
+  font-style: normal;
+	font-optical-sizing: auto;
+	src: url("./RedHatText-Regular.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Red Hat Text", sans-serif;
+	font-weight: 400;
+  font-style: italic;
+	font-optical-sizing: auto;
+	src: url("./RedHatText-Italic.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Red Hat Text";
+	font-weight: 500;
+  font-style: normal;
+	font-optical-sizing: auto;
+	src: url("./RedHatText-Medium.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Red Hat Text";
+	font-weight: 500;
+  font-style: italic;
+	font-optical-sizing: auto;
+	src: url("./RedHatText-MediumItalic.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Red Hat Text";
+	font-weight: 200;
+  font-style: normal;
+	font-optical-sizing: auto;
+	src: url("./RedHatText-Light.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Red Hat Text";
+	font-weight: 200;
+  font-style: italic;
+	font-optical-sizing: auto;
+	src: url("./RedHatText-LightItalic.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Red Hat Text";
+	font-weight: 600;
+  font-style: normal;
+	font-optical-sizing: auto;
+	src: url("./RedHatText-SemiBold.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Red Hat Text";
+	font-weight: 600;
+  font-style: italic;
+	font-optical-sizing: auto;
+	src: url("./RedHatText-SemiBoldItalic.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Red Hat Text";
+	font-weight: 800;
+  font-style: normal;
+	font-optical-sizing: auto;
+	src: url("./RedHatText-Bold.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Red Hat Text";
+	font-weight: 800;
+  font-style: italic;
+	font-optical-sizing: auto;
+	src: url("./RedHatText-BoldItalic.ttf") format("truetype");
+}

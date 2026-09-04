@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n                    INSERT INTO settings (\n                        key,\n                        value,\n                        user_id,\n                        updated_at\n                    )\n                    VALUES (\n                        'aria2_global_options',\n                        ?,\n                        ?,\n                        CURRENT_TIMESTAMP\n                    )\n                    ON CONFLICT(key, user_id) DO UPDATE\n                    SET value = excluded.value, updated_at = CURRENT_TIMESTAMP\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "3d62ab0445e88455557d418737783ad6e53e264392c5635eeade4ca4790011aa"
+}

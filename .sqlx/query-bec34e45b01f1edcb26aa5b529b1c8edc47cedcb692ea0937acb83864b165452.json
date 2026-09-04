@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n\t\t\t\tUPDATE download_history SET\n\t\t\t\t\tname = CASE WHEN ? IS NOT NULL THEN ? ELSE name END,\n\t\t\t\t\tstatus = ?,\n\t\t\t\t\tfiles = COALESCE(NULLIF(?, '[]'), files),\n\t\t\t\t\tis_resume_supported = CASE WHEN is_resume_supported = 1 THEN 1 ELSE COALESCE(?, is_resume_supported) END,\n\t\t\t\t\tcompleted_length = ?,\n\t\t\t\t\ttotal_length = ?,\n\t\t\t\t\tupload_length = ?,\n\t\t\t\t\tseeder = ?,\n\t\t\t\t\tconnections = ?,\n\t\t\t\t\tnum_seeders = ?,\n\t\t\t\t\tverified_length = ?,\n\t\t\t\t\tverify_integrity_pending = ?,\n\t\t\t\t\tcompleted_at = CASE\n\t\t\t\t\t\tWHEN ? = 'complete'\n\t\t\t\t\t\tOR ? = 'seeding'\n\t\t\t\t\t\tTHEN COALESCE(completed_at, CURRENT_TIMESTAMP)\n\t\t\t\t\t\tELSE NULL\n\t\t\t\t\tEND\n\t\t\t\tWHERE gid = ?\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 16
+    },
+    "nullable": []
+  },
+  "hash": "bec34e45b01f1edcb26aa5b529b1c8edc47cedcb692ea0937acb83864b165452"
+}

@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT gid FROM download_history WHERE name = ? LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "gid",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "24252faaedab690de791e8f9a1266825550133fd3d1945c9c281cf4072e7fb37"
+}

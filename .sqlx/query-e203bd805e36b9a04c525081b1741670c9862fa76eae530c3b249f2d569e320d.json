@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n                INSERT INTO download_history (gid, user_id, kind, status)\n                VALUES (?, ?, 'torrent', 'waiting')\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "e203bd805e36b9a04c525081b1741670c9862fa76eae530c3b249f2d569e320d"
+}

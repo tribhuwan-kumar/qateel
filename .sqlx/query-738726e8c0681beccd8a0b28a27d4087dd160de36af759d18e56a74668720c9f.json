@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n\t\t\t\t\tUPDATE download_history\n\t\t\t\t\t\tSET gid = ?,\n\t\t\t\t\t\t\terror_code = NULL,\n\t\t\t\t\t\t\terror_message = NULL,\n\t\t\t\t\t\t\tupdated_at = CURRENT_TIMESTAMP\n\t\t\t\t\tWHERE gid = ?\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "738726e8c0681beccd8a0b28a27d4087dd160de36af759d18e56a74668720c9f"
+}

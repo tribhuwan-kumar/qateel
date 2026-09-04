@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    :root {
+      --font-sans: "Red Hat Text", sans-serif;
+      --background: oklch(1 0 0);
+      --foreground: oklch(0.145 0.008 326);
+      --card: oklch(1 0 0);
+      --card-foreground: oklch(0.145 0.008 326);
+      --primary: oklch(0.212 0.019 322.12);
+      --primary-foreground: oklch(0.985 0 0);
+      --muted: oklch(0.96 0.003 325.6);
+      --muted-foreground: oklch(0.542 0.034 322.5);
+      --border: oklch(0.922 0.005 325.62);
+      --radius: 0.45rem;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --background: oklch(0.145 0.008 326);
+        --foreground: oklch(0.985 0 0);
+        --card: oklch(0.212 0.019 322.12);
+        --card-foreground: oklch(0.985 0 0);
+        --primary: oklch(0.922 0.005 325.62);
+        --primary-foreground: oklch(0.212 0.019 322.12);
+        --muted: oklch(0.263 0.024 320.12);
+        --muted-foreground: oklch(0.711 0.019 323.02);
+        --border: oklch(1 0 0 / 10%);
+      }
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background-color: var(--background);
+      color: var(--foreground);
+      width: 320px;
+      margin: 0;
+      padding: 16px;
+      /* Cool animation on open */
+      animation: slideDown 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    @keyframes slideDown {
+      from { opacity: 0; transform: translateY(-10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 12px;
+      margin-bottom: 12px;
+    }
+    .title { font-weight: 600; font-size: 16px; }
+    .version { font-size: 12px; color: var(--muted-foreground); }
+
+    .toggle-container {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--muted);
+      padding: 12px;
+      border-radius: var(--radius);
+      margin-bottom: 16px;
+    }
+
+    /* Simple Toggle Switch CSS */
+    .switch { position: relative; display: inline-block; width: 44px; height: 24px; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: var(--muted-foreground); transition: .3s; border-radius: 24px; }
+    .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: var(--background); transition: .3s; border-radius: 50%; }
+    input:checked + .slider { background-color: var(--primary); }
+    input:checked + .slider:before { transform: translateX(20px); }
+
+    .status-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px;
+    }
+    .status-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-weight: 600; }
+    .indicator { width: 10px; height: 10px; border-radius: 50%; background: #ef4444; }
+    .indicator.online { background: #22c55e; box-shadow: 0 0 8px #22c55e80; }
+    .status-row { display: flex; justify-content: space-between; font-size: 13px; margin-top: 4px; color: var(--muted-foreground); }
+    .status-val { color: var(--foreground); font-weight: 500; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <span class="title">Qateel...</span>
+    <span class="version" id="ext-version">v1.0</span>
+  </div>
+
+  <div class="toggle-container">
+    <span style="font-size: 14px; font-weight: 500;">Uri extractor</span>
+    <label class="switch">
+      <input type="checkbox" id="ext-toggle">
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <div class="status-card">
+    <div class="status-header">
+      <div class="indicator" id="ws-indicator"></div>
+      Server status
+    </div>
+    <div class="status-row"><span>Aria2 Alive</span><span class="status-val" id="srv-aria2">--</span></div>
+    <div class="status-row"><span>Qateel Alive</span><span class="status-val" id="srv-qateel">--</span></div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

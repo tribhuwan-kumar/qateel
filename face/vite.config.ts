@@ -1,0 +1,58 @@
+import { defineConfig } from 'vitest/config';
+import { playwright } from '@vitest/browser-playwright';
+import { sveltekit } from '@sveltejs/kit/vite';
+import tailwindcss from '@tailwindcss/vite'
+
+export default defineConfig(({ command, mode }) => {
+  const isDevelopment = (mode === 'development');
+  const isProduction = mode === 'production';
+  const isBuild = command === 'build';
+
+  return {
+    plugins: [sveltekit(), tailwindcss()],
+    esbuild: {
+      drop: isBuild && isProduction ? ['console', 'debugger'] : []
+    },
+    server: {
+      ...(isDevelopment && {
+        proxy: {
+          '/api': {
+            target: 'http://127.0.0.1:8080',
+            ws: true,
+            secure: false,
+            changeOrigin: true
+          }
+        },
+				allowedHosts: ["25bc-42-108-176-20.ngrok-free.app"],
+      }),
+    },
+    test: {
+      expect: { requireAssertions: true },
+      projects: [
+        {
+          extends: './vite.config.ts',
+          test: {
+            name: 'client',
+            browser: {
+              enabled: true,
+              provider: playwright(),
+              instances: [{ browser: 'chromium', headless: true }]
+            },
+            include: ['src/**/*.svelte.{test,spec}.{js,ts}'],
+            exclude: ['src/lib/server/**']
+          }
+        },
+
+        {
+          extends: './vite.config.ts',
+          test: {
+            name: 'server',
+            environment: 'node',
+            include: ['src/**/*.{test,spec}.{js,ts}'],
+            exclude: ['src/**/*.svelte.{test,spec}.{js,ts}']
+          }
+        }
+      ]
+    }
+  };
+});

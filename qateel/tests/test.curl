@@ -1,0 +1,430 @@
+# Plug 'oysandvik94/curl.nvim'
+# openssl req -x509 -out localhost.crt -keyout localhost.key \
+# 	-newkey rsa:2048 -nodes -sha256 \
+# 	-subj '/CN=localhost' -extensions EXT -config <( \
+# 	 printf "[dn]\nCN=localhost\n[req]\ndistinguished_name = dn\n[EXT]\nsubjectAltName=DNS:localhost\nkeyUsage=digitalSignature\nextendedKeyUsage=serverAuth")
+#
+
+# host, port as var
+---host=http://localhost
+---port=8080
+---csrf_token=YTJl7jm_upFkOQYg0QsutWsM-4ECvZjb2kRtDzMWKZE
+
+# tell stopped
+curl -H
+    'Content-Type:application/json' -d '{
+        "jsonrpc":"2.0",
+        "id":"qateel",
+        "method":"aria2.tellStopped",
+        "params": ["token:foobar", 0, 100000]
+    }'
+http://localhost:6800/jsonrpc
+
+curl -H
+    'Content-Type:application/json' -d '{
+        "jsonrpc":"2.0",
+        "id":"qateel",
+        "method":"aria2.getGlobalOption",
+        "params": ["token:foobar"]
+    }'
+http://localhost:6800/jsonrpc
+
+
+curl -H
+    'Content-Type:application/json' -d '{
+		"jsonrpc": "2.0",
+		"id": "trigger_error",
+		"method": "aria2.addUri",
+		"params": [
+			"token:foobar",
+			["https://google.com"],
+			{
+				"checksum": "invalid-hash=00000000000000000000000000000000"
+			}
+		]
+	}'
+http://localhost:6800/jsonrpc
+
+
+curl -H
+    'Content-Type:application/json' -d '{
+        "jsonrpc":"2.0",
+        "id":"qateel",
+        "method":"aria2.getOption",
+        "params": ["token:foobar", "8d382aa67886b9de"]
+    }'
+http://localhost:6800/jsonrpc
+
+
+curl -H
+  'Content-Type:application/json' -d '{
+        "jsonrpc":"2.0",
+        "id":"qateel",
+        "method":"aria2.tellWaiting",
+        "params": ["token:foobar", 0, 100000]
+    }'
+http://localhost:6800/jsonrpc
+
+# tell acitve
+curl -H
+    'Content-Type:application/json' -d '{
+        "jsonrpc":"2.0",
+        "id":"qateel",
+        "method":"aria2.tellActive",
+        "params": ["token:foobar"]
+    }'
+http://localhost:6800/jsonrpc
+
+curl -H
+    'Content-Type:application/json' -d '{
+        "jsonrpc":"2.0",
+        "id":"qateel",
+        "method":"aria2.getVersion",
+        "params": ["token:foobar"]
+    }'
+http://localhost:6800/jsonrpc
+
+curl -H
+    'Content-Type:application/json' -d '{
+        "jsonrpc":"2.0",
+        "id":"qateel",
+        "method":"aria2.getSessionInfo",
+        "params": ["token:foobar"]
+    }'
+http://localhost:6800/jsonrpc
+
+curl -H
+    'Content-Type:application/json' -d '{
+        "jsonrpc":"2.0",
+        "id":"qateel",
+        "method":"aria2.getPeers",
+        "params": ["token:foobar"]
+    }'
+http://localhost:6800/jsonrpc
+
+
+curl -H 'Content-Type:application/json' -d '{
+	"jsonrpc":"2.0",
+		"id":"qateel",
+		"method":"aria2.tellStatus",
+		"params": ["token:foobar", "435b567996deb804"]
+}'
+http://localhost:6800/jsonrpc
+
+curl POST -H
+	"Content-Type: application/json" -d '{
+		"id":"qateel",
+		"jsonrpc":"2.0",
+		"method":"aria2.changeOption",
+		"params":[ "token:foobar",
+			"c0e98172b4a76022", {
+			"seed-time":"0"
+		}]
+	}'
+http://localhost:6800/jsonrpc
+
+
+curl -H
+    'Content-Type:application/json' -d '{
+        "jsonrpc":"2.0",
+        "id":"qateel",
+        "method":"aria2.getGlobalStat",
+        "params": ["token:foobar"]
+    }'
+http://localhost:6800/jsonrpc
+
+
+curl -H
+    'Content-Type:application/json' -d '{
+        "jsonrpc":"2.0",
+        "id":"qateel",
+        "method":"aria2.remove",
+        "params": ["token:foobar", "c0e98172b4a76022"]
+    }'
+http://localhost:6800/jsonrpc
+
+
+curl -H
+    'Content-Type:application/json' -d '{
+        "jsonrpc":"2.0",
+        "id":"qateel",
+        "method":"aria2.unpause",
+        "params": ["token:foobar", "c0e98172b4a76022"]
+    }'
+http://localhost:6800/jsonrpc
+
+curl -H
+    'Content-Type:application/json' -d '{
+        "jsonrpc":"2.0",
+        "id":"qateel",
+        "method":"aria2.purgeDownloadResult",
+        "params": ["token:foobar"]
+    }'
+http://localhost:6800/jsonrpc
+
+
+curl -H
+    'Content-Type:application/json' -d '{
+        "jsonrpc":"2.0",
+        "id":"qateel",
+        "method":"aria2.pause",
+        "params": ["token:foobar", "0"]
+    }'
+http://localhost:6800/jsonrpc
+
+
+curl -H 'Content-Type:application/json' -d '{
+        "id":"qateel",
+        "jsonrpc":"2.0",
+        "method":"system.listMethods",
+        "params": [
+          "token:foobar"
+        ]
+    }'
+http://localhost:6800/jsonrpc
+
+
+curl -H 'Content-Type:application/json' -d '{
+        "id":"qateel",
+        "jsonrpc":"2.0",
+        "method":"system.listNotifications",
+        "params": [
+          "token:foobar"
+        ]
+    }'
+http://localhost:6800/jsonrpc
+
+
+curl -H 'Content-Type: application/json' \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": "qateel",
+    "method": "system.multicall",
+    "params": [[
+      {
+        "methodName": "aria2.addUri",
+        "params": [
+          "token:foobar",
+          ["andak"]
+        ]
+      },
+      {
+        "methodName": "aria2.addUri",
+        "params": [
+          "token:foobar",
+          ["akdjnak"]
+        ]
+      }
+    ]]
+  }'
+http://localhost:6800/jsonrpc
+
+
+curl -H 'Content-Type: application/json' \
+  -d '{
+    "id": "qateel",
+    "jsonrpc": "2.0",
+    "method": "system.multicall",
+    "params": [[
+      {
+        "methodName": "aria2.tellStatus",
+        "params": [
+					"token:foobar",
+					"e3b4faf832814159",
+					["status", "errorCode", "errorMessage"]
+				]
+      },
+      {
+        "methodName": "aria2.tellStatus",
+        "params": [
+          "token:foobar",
+					"20e074b95faadf95",
+					["status", "errorCode", "errorMessage"]
+				]
+      }
+    ]]
+  }'
+http://localhost:6800/jsonrpc
+
+
+
+# application api
+curl -c cookie -H
+    'Content-Type: application/json' \
+-d '{
+    "username": "admin",
+    "password": "checkcheck"
+    }'
+http://localhost:8080/api/auth/reg/admin
+
+curl -c cookie -H
+    'Content-Type: application/json' \
+-d '{
+    "username": "trasharia",
+    "password": "checkcheck"
+    }'
+http://localhost:8080/api/auth/login
+
+curl -v -b cookie -X DELETE \
+  -H 'Content-Type: application/json' \
+    -d '{
+    "gids": ["2ad3c647483a59d6"],
+    "deleteFile": true
+  }' http://localhost:8080/api/aria2/gid/remove
+
+curl -v -b cookie -X POST \
+  -H 'Content-Type: application/json' -d '{
+  "gid": "b2dd079e15614ba0"
+  }'
+http://localhost:8080/api/aria2/gid/pause
+
+
+curl -b cookie http://localhost:8080/api/auth/me
+
+
+curl -b cookie "http://localhost:8080/api/aria2/user/history?page=1&limit=20"
+
+curl -b cookie "http://10.63.128.102:9050/api/aria2/user/history?page=1&limit=20"
+
+# create a user
+curl -c cookie -H
+    'Content-Type: application/json' -d '{
+    "username": "hero",
+    "password": "helphelp",
+    "requesterUsername": "admin"
+    }'
+http://localhost:8080/api/auth/create/user
+
+# login a user
+curl -c cookie -H
+    'Content-Type: application/json' -d '{
+    "username": "hero",
+    "password": "helphelp"
+    }'
+http://localhost:8080/api/auth/login
+
+curl -b cookie -H
+    'Content-Type: application/json' -d '{
+      "gid": "306ef522e80aea42"
+    }'
+http://localhost:8080/api/aria2/gid/stop
+
+
+# set options
+curl -X POST 'http://localhost:8080/api/aria2/global/set/options' \
+  -b cookie \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: A-Ioh-S6s_r6H9B_I4XACEQrEd3u3uKFqdZ9Vou9dWo" \
+  -d '{
+    "options": {
+      "server-stat-timeout": "86"
+    }
+  }'
+
+
+curl -X POST 'http://localhost:8080/api/aria2/cmd/set/options'
+  -b cookie
+  -H "Content-Type: application/json"
+  -H "X-CSRF-Token: RQJ3ebf9AbrCecObyldVR9Y_e00O8bD1mYphUitgFGE"
+  -d '{
+    "options": {
+      "--rpc-secure": "true"
+    }
+}'
+
+curl -c cookie -H
+	'Content-Type: application/json'
+-d '{
+  "username": "trasharia",
+  "password": "checkcheck"
+}'
+$host:$port/api/auth/login
+
+
+
+curl $host:$port/api/aria2/cmd/set/options
+	-b cookie
+	-H "Content-Type: application/json"
+	-H "X-CSRF-Token: $csrf_token"
+-d '{
+	"options" : {
+		"daemon": "true"
+	}
+}'
+
+curl -b cookie
+  -H 'Content-Type: application/json'
+	-H "X-CSRF-Token: $csrf_token"
+	-d '{
+		"uris": [
+			"http://pchan:9080/guest/media/movies/Awake%20%282021%29.mkv",
+			"https://worker-odd-art-9c42.lelota3786.workers.dev/53b87e707091a7a5fca1c84b455b201536493a97ba6b08a5a1074ad668a24a673505aac4b4c4a5f978c2e8f8a5d1f5f1c5d3d28f74cd6ab459e0e6363fc42d8abee1d5ac6731e361f14b5c3b295807b1058a9aefa208aac4fb95cc977b3ddcea50d2661a9e80e95108c605d7612217e3e687d1a7a260477af1589d587a0125af07bf6de6425b4603e641f124920170072b6cfac04519db9caf963c236b1ebe319805c83b21469869efc7c553ca1a93d2::b36e0861e86cbe23bd3d5f2fe349fc68/Casino.Jack.2010.1080P.Bluray.Hindi.English.Esubs.MoviesMod.zone.mkv",
+			"http://pchan:9080/guest/media/movies/Batman.The.Dark.Knight.Part.2.2013.1080p.BRRip.English-Audio.MoviesVerse.Org.In.mkv",
+			"https://video-downloads.googleusercontent.com/ADGPM2nSO_FbNVpT8v4n984T2qLPDNyDIQMj5jzkMPh01O5meIsbLDJK9SsTgvkvCtaYBbFvdQ3ugNLVQjfnA-Kzgya4t6JVVR8ox_Wp_Sf5Bbpsr9qAKKziUHZ6NuGyFWZmHjQBysGwn_JEJbOw8-b-gIoTB087sVYQkqGrff7tZtf3tnI3iW383YVqBCZowuE4MNQrUDUH-Q4Eqb8in_7UA-jYB_Gg3zsHagxnZpP8VaxA9WYup7LiGn79iNIvEPBkT93JlR4zSamNKLPovVkdsi25-gRfgBhUMLgpsw6mXHxFYzGHkGO5ohTadt1vVV3PzE4PlT3jtu_oCmy6DXi9F_hQyYtIrvKTwOzqtWY0CMet2U8GWkkYu2y9qk0k75oxy3WwjSGk0NLviiMIP1rjDX_kBSJnYTtkm9i64asvOtWN8nvEiXjqQ5iWAEn_btahoRyFBFRq4zDWbZrDhD_YDNeZxhoNrQ3Iu633M1VYBggHhg6IrhWE1ksxaHBR49y__ujaCKN0gVuf79ZNJxQNVpCjp8VMnRaY8NvIFUT2YKG9pebgjTccd_nChn60cWpqMx2gHSpl7hu_b1J1EdAiDlOMD9UHRwSJZI7x2DM-tXBVH9N1IqYG24NHO3oP87fcoMMscyyGwoGYQTt43XOAr2qLXE2n_xCYEQ6gPG0u9YccdqP_-YIfkZ3gOpi9lfEvJZ8JJ3lxF5vFuti1FwBhWfUrx392ysri6GOYHmoPZxAuL9uwagOn0FF5KmcH1UI0gtQLZNRVA1ppDQVrH9bncLCy7FvcAANaezQYqe2WL2ZOJVy1av4p9eBWelSVGhhtYO_pZMXdHmLRJ4fFeXAlMFBxxvE4HbkdB1IFu2jcYWVedn47ZImqN0wJrRfDocMaZ4pkKP9rWSXpduREyLTyp6hZ6iGHur4TOMhN-15SuLJ9zvK3DwH2jeKHnqElRXVQWyuLTuJL_ljY_flAmhEr3SD5HPE-BNCRm5Yvjp-AA8fr-GGndyTxFq900XLyKFGeZ6f8ipBjmDHIa_qGBO9OKKAOPpcgaH420A-T_S64iV2UArRCiLZ1v_GJ35jAVZr7nQog39pN",
+			"https://ash-speed.hetzner.com/100MB.bin"
+		]
+  }'
+$host:$port/api/aria2/add/uris
+
+
+curl -b cookie
+	-X POST
+  -H 'Content-Type: application/json'
+	-H "X-CSRF-Token: $csrf_token"
+	-d '{
+		"uris": [
+			"http://pchan:9080/guest/media/movies/Awake%20%282021%29.mkv",
+			"https://worker-odd-art-9c42.lelota3786.workers.dev/53b87e707091a7a5fca1c84b455b201536493a97ba6b08a5a1074ad668a24a673505aac4b4c4a5f978c2e8f8a5d1f5f1c5d3d28f74cd6ab459e0e6363fc42d8abee1d5ac6731e361f14b5c3b295807b1058a9aefa208aac4fb95cc977b3ddcea50d2661a9e80e95108c605d7612217e3e687d1a7a260477af1589d587a0125af07bf6de6425b4603e641f124920170072b6cfac04519db9caf963c236b1ebe319805c83b21469869efc7c553ca1a93d2::b36e0861e86cbe23bd3d5f2fe349fc68/Casino.Jack.2010.1080P.Bluray.Hindi.English.Esubs.MoviesMod.zone.mkv",
+			"http://pchan:9080/guest/media/movies/Batman.The.Dark.Knight.Part.2.2013.1080p.BRRip.English-Audio.MoviesVerse.Org.In.mkv",
+			"https://video-downloads.googleusercontent.com/ADGPM2nai4FpcSOtxIyjVgnQ54tAU8iYqSCq3frZzEmG8WkN--HscvEsWVNOnhU51FDKkBrMnRlV0TQS7_g9-XkL8zHvtwCylZ2cMI3E-PcRDAWTNU_xmariZz1yy3dhanJ0uMpXgRseAWP8B9f_iJeiLDvG30D3VLby32AM4TTrctuxEfFvNKL6jCKDbFuH7l9M33htKXlM_Yg-IAWog9Vneb2RQTeTEE-Vgr_6X6SAhiAT1MvDSuls7w_i94TJE0TWGmlsKeud-I9Rm5c_ZRQp9MS0iB3OHD7FXQ6nSEUEzUU-Q8dgbX6-beSUmhF6qlwqKbSpquNFmxGGTw_er62y7rcJ2cPcrc4uCb45OX_ZP7-Vvyez5mCJEhP3vGcMaf5pgfF6lsvVbd4lsxk2IpLEIj_KmCfXwBFR0THE9DgYr1x99lDvPCQ_7Ga9JePOboe8L_-VQTlCMAvCJaReGSG3_H4_PpR4hv47s1SP2NYlltCMgHdcImSlYiodyAOm8dJdPm8Tx63eQx1kTuvzx6GpgBTBC95y37Gbt8acGQKnGl-eelL1oV-StAqfKazXkOFIiizLd_pIPitckF3JjYNRDgAKyLKhonbTvy57LzB3h-cir8ypjf7Uv-Y85d1nFeS255ByAhkYW6osKABqYfdCAWS5_VA_ob16HDfWP0y_cKGAS-WIfBmlFwfNzv2SCEfcCl9rKvhpowQpANz8ttVDfybgjODwsekN91kS6RKvcj_UuV9AvCHBTvETgupHDG5oMQo7yjlHzabmN67VvlMPXhpthZl5iy1V7KgIAMR9FyvMK5eW9ZAXry8a7HWTyRLY3FAhuB3IQtDyh71VW1FBtSEQxMjKs4pUcEgCg-VvbRh-5Ik-rUXdADSVeCoA5pgQ0vVKv-hL-a8Q9fcdhircrn_CdCR9FpkhgIzxrgnG0L6an3eVSAwF4EDMQYk1WR_2Aivk6E2CX396iJ6wuNfiUWJtClKTPK4M8puJADDEh7J72inI7KjiywvpS35NQKiJ5T88kc0F-WPFvVV4pP8QU8A49xjN-EjoHpoNyFwy6IFTeOQB8ZMsbz5EfFGEaK_-sN6I-b5F",
+			"https://thereisnosuchurl.com/this_is_a_huge_file",
+			"https://ash-speed.hetzner/100MB.bin",
+			"magnet:?xt=urn:btih:1F97CD5AA1F6244F522EC9F5E0EBCD23110E3D01&dn=Minions+and+Monsters+2026+1080P+AMZN+WEB-DL+DD+5.1.+X265+POOTLED&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fopen.demonii.com%3A1337%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&tr=udp%3A%2F%2Fvito-tracker.space%3A6969%2Fannounce&tr=udp%3A%2F%2Fvito-tracker.duckdns.org%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.theoks.net%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.srv00.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.qu.ax%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.corpscorp.online%3A80%2Fannounce",
+			"sftp://100.113.109.0/home/trash/tar/docker.io-valkey-valkey.tar"
+		]
+  }'
+$host:$port/api/aria2/add/uris/preflight
+
+
+curl -b cookie
+	-X POST
+  -H 'Content-Type: application/json'
+	-H "X-CSRF-Token: $csrf_token"
+	-d '{
+		"gid": "c0e98172b4a76022"
+	}'
+$host:$port/api/aria2/gid/details
+
+
+curl -b cookie
+	-X POST
+  -H 'Content-Type: application/json'
+	-H "X-CSRF-Token: $csrf_token"
+	-d '{
+		"gid": "c0e98172b4a76022"
+	}'
+$host:$port/api/aria2/gid/get/options
+
+
+curl -b cookie
+  -H 'Content-Type: application/json'
+	-H "X-CSRF-Token: $csrf_token"
+$host:$port/api/aria2/info
+
+curl -b cookie "http://localhost:9080/api/aria2/user/history?page=1&limit=15&sortBy=name&order=desc"
+
+curl -b cookie
+	-X GET
+  -H 'Content-Type: application/json'
+	-H "X-CSRF-Token: $csrf_token"
+"http://localhost:8080/api/aria2/user/history?page=1&limit=15&sort_by=size&order=asc"
+
+curl -b cookie
+	-X GET
+  -H 'Content-Type: application/json'
+"http://localhost:8080/api/aria2/search?q=m"
+
+
+
+
+

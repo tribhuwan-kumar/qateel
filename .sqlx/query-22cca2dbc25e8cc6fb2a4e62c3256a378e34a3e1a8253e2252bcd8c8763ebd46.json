@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "\n\t\t\tSELECT\n\t\t\t\tdir,\n\t\t\t\tfiles,\n\t\t\t\toptions,\n\t\t\t\tinfo_hash,\n\t\t\t\tsource_uri,\n\t\t\t\ttotal_length,\n\t\t\t\tis_resume_supported,\n\t\t\t\tkind as \"kind: Kind\",\n\t\t\t\tstatus as \"status: GidStatus\",\n\t\t\t\ttorrent as \"torrent: sqlx::types::Json<TorrentMagnetMeta>\"\n\t\t\tFROM download_history\n\t\t\tWHERE gid = ?\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "dir",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "files",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "options",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "info_hash",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "source_uri",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "total_length",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "is_resume_supported",
+        "ordinal": 6,
+        "type_info": "Bool"
+      },
+      {
+        "name": "kind: Kind",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "status: GidStatus",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "torrent: sqlx::types::Json<TorrentMagnetMeta>",
+        "ordinal": 9,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "22cca2dbc25e8cc6fb2a4e62c3256a378e34a3e1a8253e2252bcd8c8763ebd46"
+}

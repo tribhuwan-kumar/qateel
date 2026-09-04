@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT options\n                    FROM download_history\n                    WHERE gid = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "options",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "3a67b60091a22714beee4c79e2ee8ee3e5690089f450032bc3aebb587f88fb8c"
+}

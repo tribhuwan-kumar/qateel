@@ -1,0 +1,176 @@
+{
+  "db_name": "SQLite",
+  "query": "\n\t\t\tSELECT\n\t\t\t\tgid,\n\t\t\t\tname,\n\t\t\t\tkind as \"kind: Kind\",\n\t\t\t\tstatus as \"status: GidStatus\",\n\t\t\t\tdir,\n\t\t\t\tfiles,\n\t\t\t\ttotal_length,\n\t\t\t\tcompleted_length,\n\t\t\t\tupload_length,\n\t\t\t\tsource_uri,\n\t\t\t\tinfo_hash,\n\t\t\t\tseeder,\n\t\t\t\tcontent_hash,\n\t\t\t\terror_code,\n\t\t\t\terror_message,\n\t\t\t\ttorrent as \"torrent: sqlx::types::Json<TorrentMagnetMeta>\",\n\t\t\t\toptions,\n\t\t\t\tis_resume_supported,\n\t\t\t\tconnections,\n\t\t\t\tnum_pieces,\n\t\t\t\tnum_seeders,\n\t\t\t\tpiece_length,\n\t\t\t\tverified_length,\n\t\t\t\tverify_integrity_pending,\n\t\t\t\tcreated_at as \"created_at!\",\n\t\t\t\tcompleted_at as \"completed_at\",\n\t\t\t\tuser_id\n\t\t\tFROM download_history\n\t\t\tWHERE gid = ?\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "gid",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "kind: Kind",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "status: GidStatus",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "dir",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "files",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "total_length",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "completed_length",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "upload_length",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "source_uri",
+        "ordinal": 9,
+        "type_info": "Text"
+      },
+      {
+        "name": "info_hash",
+        "ordinal": 10,
+        "type_info": "Text"
+      },
+      {
+        "name": "seeder",
+        "ordinal": 11,
+        "type_info": "Bool"
+      },
+      {
+        "name": "content_hash",
+        "ordinal": 12,
+        "type_info": "Text"
+      },
+      {
+        "name": "error_code",
+        "ordinal": 13,
+        "type_info": "Integer"
+      },
+      {
+        "name": "error_message",
+        "ordinal": 14,
+        "type_info": "Text"
+      },
+      {
+        "name": "torrent: sqlx::types::Json<TorrentMagnetMeta>",
+        "ordinal": 15,
+        "type_info": "Text"
+      },
+      {
+        "name": "options",
+        "ordinal": 16,
+        "type_info": "Text"
+      },
+      {
+        "name": "is_resume_supported",
+        "ordinal": 17,
+        "type_info": "Bool"
+      },
+      {
+        "name": "connections",
+        "ordinal": 18,
+        "type_info": "Text"
+      },
+      {
+        "name": "num_pieces",
+        "ordinal": 19,
+        "type_info": "Text"
+      },
+      {
+        "name": "num_seeders",
+        "ordinal": 20,
+        "type_info": "Text"
+      },
+      {
+        "name": "piece_length",
+        "ordinal": 21,
+        "type_info": "Text"
+      },
+      {
+        "name": "verified_length",
+        "ordinal": 22,
+        "type_info": "Text"
+      },
+      {
+        "name": "verify_integrity_pending",
+        "ordinal": 23,
+        "type_info": "Bool"
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 24,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "completed_at",
+        "ordinal": 25,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "user_id",
+        "ordinal": 26,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "8d82336a00ab0af58d8ac06d2d7e2895bbecadf7da3f65692960e447d89137f0"
+}

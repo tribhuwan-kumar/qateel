@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<link rel="icon" href="%sveltekit.assets%/favicon.svg" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		%sveltekit.head%
+		<style id="init-animation-style">
+			body {
+				margin: 0;
+				padding: 0;
+			}
+			#initial-loader {
+				padding: 0px;
+				margin: 0px;
+				width: 100vw;
+				height: 100vh;
+				display: flex;
+				row-gap: 64px;
+				flex-direction: column;
+				align-items: center;
+				justify-content: center;
+				background: var(--init-loader-bg, oklch(0.145 0.008 326));
+				color: var(--init-loader-text, oklch(0.985 0 0));
+				transition: background-color 0.2s ease;
+			}
+			#pac-man-container {
+				display: block;
+				position: relative;
+				width: 240px;
+				height: fit-content;
+			}
+			.pac-man {
+				border-radius: 50%;
+				border-radius: 100em 100em 0 0;
+				background: var(--init-loader-bg, oklch(0.145 0.008 326));
+				transform-origin: bottom;
+				-webkit-animation: eating-top 0.5s infinite;
+								animation: eating-top 0.5s infinite;
+			}
+			.pac-man,
+			.pac-man::before {
+				width: 70px;
+				height: calc(70px/2);
+				background: #e7bde7;
+			}
+			.pac-man::before {
+				content: '';
+				display: block;
+				margin-top: calc(70px/2);
+				position: absolute;
+				transform-origin: top;
+				border-radius: 0 0 100em 100em;
+				transform: rotate(80deg);
+				-webkit-animation: eating-bottom 0.5s infinite;
+								animation: eating-bottom 0.5s infinite;
+			}
+			.pac-man::after {
+				position: absolute;
+				border-radius: 100em;
+				content: '';
+				display: block;
+				height: 20px;
+				width: 20px;
+				margin-top: calc((70px / 2) - 10px);
+				margin-left: calc((70px / 2) - 10px);
+				transform-origin: center;
+				-webkit-animation: center 0.5s infinite, ball 0.5s -0.33s infinite linear;
+								animation: center 0.5s infinite, ball 0.5s -0.33s infinite linear;
+			}
+			@-webkit-keyframes eating-top {
+				0% {
+					transform: rotate(-40deg);
+				}
+				50% {
+					transform: rotate(0deg);
+				}
+				100% {
+					transform: rotate(-40deg);
+				}
+			}
+			@keyframes eating-top {
+				0% {
+					transform: rotate(-40deg);
+				}
+				50% {
+					transform: rotate(0deg);
+				}
+				100% {
+					transform: rotate(-40deg);
+				}
+			}
+			@-webkit-keyframes eating-bottom {
+				0% {
+					transform: rotate(80deg);
+				}
+				50% {
+					transform: rotate(0deg);
+				}
+				100% {
+					transform: rotate(80deg);
+				}
+			}
+			@keyframes eating-bottom {
+				0% {
+					transform: rotate(80deg);
+				}
+				50% {
+					transform: rotate(0deg);
+				}
+				100% {
+					transform: rotate(80deg);
+				}
+			}
+			@-webkit-keyframes center {
+				0% {
+					transform: rotate(40deg);
+				}
+				50% {
+					transform: rotate(0deg);
+				}
+				100% {
+					transform: rotate(40deg);
+				}
+			}
+			@keyframes center {
+				0% {
+					transform: rotate(40deg);
+				}
+				50% {
+					transform: rotate(0deg);
+				}
+				100% {
+					transform: rotate(40deg);
+				}
+			}
+			@-webkit-keyframes ball {
+				0% {
+					opacity: 0.7;
+					box-shadow: 70px 0 0 0 #e7bde7, 120px 0 0 0 #e7bde7, 170px 0 0 0 #e7bde7, 220px 0 0 0 #e7bde7;
+				}
+				100% {
+					box-shadow: 20px 0 0 0 #e7bde7, 70px 0 0 0 #e7bde7, 120px 0 0 0 #e7bde7, 170px 0 0 0 #e7bde7;
+				}
+			}
+			@keyframes ball {
+				0% {
+					opacity: 0.7;
+					box-shadow: 70px 0 0 0 #e7bde7, 120px 0 0 0 #e7bde7, 170px 0 0 0 #e7bde7, 220px 0 0 0 #e7bde7;
+				}
+				100% {
+					box-shadow: 20px 0 0 0 #e7bde7, 70px 0 0 0 #e7bde7, 120px 0 0 0 #e7bde7, 170px 0 0 0 #e7bde7;
+				}
+			}
+			.loading-text {
+				text-align: center;
+				width: 100%;
+			}
+			.loading-text-container {
+				position: relative;
+				display: block;
+			}
+			.loading-text span {
+				display: inline-block;
+				margin: 0 2px;
+				color: oklch(0.711 0.019 323.02);
+			}
+			.loading-text span:nth-child(1) {
+				filter: blur(0px);
+				-webkit-animation: blur-text 1.5s 0s infinite linear alternate;
+								animation: blur-text 1.5s 0s infinite linear alternate;
+			}
+			.loading-text span:nth-child(2) {
+				filter: blur(0px);
+				-webkit-animation: blur-text 1.5s 0.2s infinite linear alternate;
+								animation: blur-text 1.5s 0.2s infinite linear alternate;
+			}
+			.loading-text span:nth-child(3) {
+				filter: blur(0px);
+				-webkit-animation: blur-text 1.5s 0.4s infinite linear alternate;
+								animation: blur-text 1.5s 0.4s infinite linear alternate;
+			}
+			.loading-text span:nth-child(4) {
+				filter: blur(0px);
+				-webkit-animation: blur-text 1.5s 0.6s infinite linear alternate;
+								animation: blur-text 1.5s 0.6s infinite linear alternate;
+			}
+			.loading-text span:nth-child(5) {
+				filter: blur(0px);
+				-webkit-animation: blur-text 1.5s 0.8s infinite linear alternate;
+								animation: blur-text 1.5s 0.8s infinite linear alternate;
+			}
+			.loading-text span:nth-child(6) {
+				filter: blur(0px);
+				-webkit-animation: blur-text 1.5s 1s infinite linear alternate;
+								animation: blur-text 1.5s 1s infinite linear alternate;
+			}
+			.loading-text span:nth-child(7) {
+				filter: blur(0px);
+				-webkit-animation: blur-text 1.5s 1.2s infinite linear alternate;
+								animation: blur-text 1.5s 1.2s infinite linear alternate;
+			}
+			.loading-text span:nth-child(8) {
+				filter: blur(0px);
+				-webkit-animation: blur-text 1.5s 1.2s infinite linear alternate;
+								animation: blur-text 1.5s 1.2s infinite linear alternate;
+			}
+			.loading-text span:nth-child(9) {
+				filter: blur(0px);
+				-webkit-animation: blur-text 1.5s 1.2s infinite linear alternate;
+								animation: blur-text 1.5s 1.2s infinite linear alternate;
+			}
+			.loading-text span:nth-child(10) {
+				filter: blur(0px);
+				-webkit-animation: blur-text 1.5s 1.2s infinite linear alternate;
+								animation: blur-text 1.5s 1.2s infinite linear alternate;
+			}
+			.loading-text span:nth-child(11) {
+				filter: blur(0px);
+				-webkit-animation: blur-text 1.5s 1.2s infinite linear alternate;
+								animation: blur-text 1.5s 1.2s infinite linear alternate;
+			}
+			.loading-text span:nth-child(12) {
+				filter: blur(0px);
+				-webkit-animation: blur-text 1.5s 1.2s infinite linear alternate;
+								animation: blur-text 1.5s 1.2s infinite linear alternate;
+			}
+			.loading-text span:nth-child(13) {
+				filter: blur(0px);
+				-webkit-animation: blur-text 1.5s 1.2s infinite linear alternate;
+								animation: blur-text 1.5s 1.2s infinite linear alternate;
+			}
+			.loading-text span:nth-child(15) {
+				filter: blur(0px);
+				-webkit-animation: blur-text 1.5s 1.2s infinite linear alternate;
+								animation: blur-text 1.5s 1.2s infinite linear alternate;
+			}
+			.loading-text span:nth-child(16) {
+				filter: blur(0px);
+				-webkit-animation: blur-text 1.5s 1.2s infinite linear alternate;
+								animation: blur-text 1.5s 1.2s infinite linear alternate;
+			}
+			.loading-text span:nth-child(17) {
+				filter: blur(0px);
+				-webkit-animation: blur-text 1.5s 1.2s infinite linear alternate;
+								animation: blur-text 1.5s 1.2s infinite linear alternate;
+			}
+			.loading-text span:nth-child(18) {
+				filter: blur(0px);
+				-webkit-animation: blur-text 1.5s 1.2s infinite linear alternate;
+								animation: blur-text 1.5s 1.2s infinite linear alternate;
+			}
+			.loading-text span:nth-child(19) {
+				filter: blur(0px);
+				-webkit-animation: blur-text 1.5s 1.2s infinite linear alternate;
+								animation: blur-text 1.5s 1.2s infinite linear alternate;
+			}
+			.loading-text span:nth-child(20) {
+				filter: blur(0px);
+				-webkit-animation: blur-text 1.5s 1.2s infinite linear alternate;
+								animation: blur-text 1.5s 1.2s infinite linear alternate;
+			}
+			.loading-text span:nth-child(21) {
+				filter: blur(0px);
+				-webkit-animation: blur-text 1.5s 1.2s infinite linear alternate;
+								animation: blur-text 1.5s 1.2s infinite linear alternate;
+			}
+			@-webkit-keyframes blur-text {
+				0% {
+					filter: blur(0px);
+				}
+				100% {
+					filter: blur(4px);
+				}
+			}
+			@keyframes blur-text {
+				0% {
+					filter: blur(0px);
+				}
+				100% {
+					filter: blur(4px);
+				}
+			}
+		</style>
+		<script class="init-loader-script">
+			(function () {
+				try {
+					const savedMode = localStorage.getItem('mode-watcher-mode') || 'dark';
+					const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+					const isDark = savedMode === 'dark' || (savedMode === 'system' && systemPrefersDark);
+
+					const htmlEl = document.documentElement;
+					if (isDark) {
+						htmlEl.style.setProperty('--init-loader-bg', 'oklch(0.145 0.008 326)');
+						htmlEl.style.setProperty('--init-loader-text', 'oklch(0.985 0 0)');
+					} else {
+						htmlEl.style.setProperty('--init-loader-bg', 'oklch(0.985 0 0)');
+						htmlEl.style.setProperty('--init-loader-text', 'oklch(0.145 0.008 326)');
+					}
+				} catch (e) {
+					console.error("Theme initialization error:", e);
+				}
+			})();
+		</script>
+	</head>
+	<body data-sveltekit-preload-data="hover">
+		<div style="display: contents">
+			%sveltekit.body%
+
+			<div id="initial-loader">
+				<div id="pac-man-container">
+					<div class="pac-man"></div>
+				</div>
+				<div class="loading-text-container">
+					<div class="loading-text">
+						<span class="loading-text-words">C</span>
+						<span class="loading-text-words">O</span>
+						<span class="loading-text-words">N</span>
+						<span class="loading-text-words">N</span>
+						<span class="loading-text-words">E</span>
+						<span class="loading-text-words">C</span>
+						<span class="loading-text-words">T</span>
+						<span class="loading-text-words">I</span>
+						<span class="loading-text-words">N</span>
+						<span class="loading-text-words">G</span>
+						<span class="loading-text-words"> </span>
+						<span class="loading-text-words">T</span>
+						<span class="loading-text-words">O</span>
+						<span class="loading-text-words"> </span>
+						<span class="loading-text-words">Q</span>
+						<span class="loading-text-words">A</span>
+						<span class="loading-text-words">T</span>
+						<span class="loading-text-words">E</span>
+						<span class="loading-text-words">E</span>
+						<span class="loading-text-words">L</span>
+						<span class="loading-text-words">.</span>
+						<span class="loading-text-words">.</span>
+						<span class="loading-text-words">.</span>
+					</div>
+				</div>
+			</div>
+		</div>
+	</body>
+</html>

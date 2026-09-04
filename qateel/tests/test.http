@@ -1,0 +1,490 @@
+#@aria2 tellStatus
+POST http://localhost:6800/jsonrpc
+Content-Type: application/json
+
+{
+  "jsonrpc":"2.0",
+  "id":"qateel",
+  "method":"aria2.tellStatus",
+  "params": ["token:foobar", "ec92a31c52c552ab"]
+}
+
+###
+#@aria2 getglobalstat
+POST http://localhost:6800/jsonrpc
+Content-Type: application/json
+
+{
+  "jsonrpc":"2.0",
+  "id":"qateel",
+  "method":"aria2.getGlobalStat",
+  "params": ["token:foobar"]
+}
+
+###
+#@aria2 multicall
+POST http://localhost:6800/jsonrpc
+Content-Type: application/json"
+
+{
+	"jsonrpc": "2.0",
+		"id": "qateel",
+		"method": "system.multicall",
+		"params": [[
+			{
+				"methodName": "aria2.remove",
+				"params": [
+					"token:foobar",
+					"70c5c5a59e9c206d"
+				]
+			},
+			{
+				"methodName": "aria2.removeDownloadResult",
+				"params": [
+					"token:foobar",
+					"db5349d0fc346695"
+				]
+			}
+		]]
+}
+
+
+###
+#@aria2 removeDownloadResult
+POST http://localhost:6800/jsonrpc
+Content-Type: application/json
+
+{
+  "jsonrpc":"2.0",
+  "id":"qateel",
+  "method":"aria2.removeDownloadResult",
+  "params": ["token:foobar", "82d8e3f458cee5a3"]
+}
+
+###
+#@aria2 getFiles
+POST http://localhost:6800/jsonrpc
+Content-Type: application/json
+
+{
+  "jsonrpc":"2.0",
+  "id":"qateel",
+  "method":"aria2.getFiles",
+  "params": ["token:foobar", "84c61c6fd7906ba8"]
+}
+
+###
+#@aria2 getFiles
+POST http://localhost:6800/jsonrpc
+Content-Type: application/json
+
+{
+  "jsonrpc":"2.0",
+  "id":"qateel",
+  "method":"aria2.unpause",
+  "params": ["token:foobar", "ea54f44e2579d9de"]
+}
+
+###
+#@aria2 purgeDownloadResult
+POST http://localhost:6800/jsonrpc
+Content-Type: application/json
+
+{
+  "jsonrpc":"2.0",
+  "id":"qateel",
+  "method":"aria2.purgeDownloadResult",
+  "params": ["token:foobar"]
+}
+
+
+###
+#@aria2 pause
+POST http://localhost:6800/jsonrpc
+Content-Type: application/json
+
+{
+  "jsonrpc":"2.0",
+  "id":"qateel",
+  "method":"aria2.pause",
+  "params": ["token:foobar", "7bf066f41831e19c"]
+}
+
+###
+#@aria2 getPeers
+POST http://localhost:6800/jsonrpc
+Content-Type: application/json
+
+{
+  "jsonrpc":"2.0",
+  "id":"qateel",
+  "method":"aria2.getPeers",
+  "params": ["token:foobar", "894a5c770704bc79"]
+}
+
+###
+#@aria2 getServers
+POST http://localhost:6800/jsonrpc
+Content-Type: application/json
+
+{
+  "jsonrpc":"2.0",
+  "id":"qateel",
+  "method":"aria2.getServers",
+  "params": ["token:foobar", "c7295eea905cabde"]
+}
+
+###
+#@aria2 getUris
+POST http://localhost:6800/jsonrpc
+Content-Type: application/json
+
+{
+  "jsonrpc":"2.0",
+  "id":"qateel",
+  "method":"aria2.getUris",
+  "params": ["token:foobar", "1341cb2c6125ff1d"]
+}
+
+###
+
+#@aria2 tellWaiting
+POST http://localhost:6800/jsonrpc
+Content-Type: application/json
+
+{
+  "jsonrpc":"2.0",
+  "id":"qateel",
+  "method":"aria2.tellWaiting",
+  "params": ["token:foobar", 0, 10000]
+}
+
+###
+#@aria2 tellActive
+POST http://localhost:6800/jsonrpc
+Content-Type: application/json
+
+{
+  "jsonrpc":"2.0",
+  "id":"qateel",
+  "method":"aria2.tellActive",
+  "params": ["token:foobar"]
+}
+
+###
+#@aria2 tellActive
+POST http://localhost:6800/jsonrpc
+Content-Type: application/json
+
+{
+  "jsonrpc":"2.0",
+  "id":"qateel",
+  "method":"aria2.forceRemove",
+  "params": ["token:foobar", "695e1011ec96cb8b"]
+}
+
+###
+#@aria2 getGlobalOption
+POST http://localhost:6800/jsonrpc
+Content-Type: application/json
+
+{
+  "jsonrpc":"2.0",
+  "id":"qateel",
+  "method":"aria2.getGlobalOption",
+  "params": ["token:foobar"]
+}
+
+###
+#@aria2 changeGlobalOption
+POST http://localhost:6800/jsonrpc
+Content-Type: application/json"
+
+{
+  "jsonrpc": "2.0",
+  "id":"qateel",
+  "method": "aria2.changeGlobalOption",
+  "params": [
+    "token:foobar", {
+			"rpc-max-request-size": "1M"
+  }]
+}
+
+
+###
+#@aria2 addUri
+POST http://localhost:6800/jsonrpc
+Content-Type: application/json"
+
+{
+	"jsonrpc": "2.0",
+		"id": "qateel",
+		"method": "system.multicall",
+		"params": [[
+			{
+				"methodName": "aria2.addUri",
+				"params": [
+					"token:foobar",
+					["magnet:?xt=urn:btih:50178C94DEE5CD9738B8CCFD4B582A1B53F9C8A2&dn=From+2022+S01E07+1080p+CATCHPLAY+WEB-DL+H+264+AAC-UBWEB&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fopen.demonii.com%3A1337%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&tr=udp%3A%2F%2Fvito-tracker.space%3A6969%2Fannounce&tr=udp%3A%2F%2Fvito-tracker.duckdns.org%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.theoks.net%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.srv00.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.qu.ax%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.corpscorp.online%3A80%2Fannounce"]
+				]
+			}
+		]]
+}'
+
+
+###
+WEBSOCKET ws://localhost:6800/jsonrpc
+
+###
+#@qateel get_history
+#@attach-cookie-jar
+GET http://localhost:8080/api/aria2/user/history
+
+
+###
+#@qateel remove
+#@attach-cookie-jar
+DELETE http://localhost:8080/api/aria2/gid/remove
+Content-Type: application/json
+
+{
+  "gids": ["2ad3c647483a59d6"],
+  "deleteFile": false
+}
+
+
+###
+#@qateel details
+#@attach-cookie-jar
+POST http://localhost:8080/api/aria2/gid/details
+Content-Type: application/json
+X-CSRF-Token: {{decoded_csrf_token}}
+
+{
+  "gid": "000d0fab66f40b4c"
+}
+
+###
+#@qateel add_uris
+#@attach-cookie-jar
+POST http://localhost:5173/api/aria2/add/uris
+Content-Type: application/json
+X-CSRF-Token: {{decoded_csrf_token}}
+
+{
+  "uris": ["https://worker-odd-art-9c42.lelota3786.workers.dev/53b87e707091a7a5fca1c84b455b201536493a97ba6b08a5a1074ad668a24a673505aac4b4c4a5f978c2e8f8a5d1f5f1c5d3d28f74cd6ab459e0e6363fc42d8abee1d5ac6731e361f14b5c3b295807b1058a9aefa208aac4fb95cc977b3ddcea50d2661a9e80e95108c605d7612217e3e687d1a7a260477af1589d587a0125af07bf6de6425b4603e641f124920170072b6cfac04519db9caf963c236b1ebe319805c83b21469869efc7c553ca1a93d2::b36e0861e86cbe23bd3d5f2fe349fc68/Casino.Jack.2010.1080P.Bluray.Hindi.English.Esubs.MoviesMod.zone.mkv"],
+  "options":{}
+}
+
+###
+#@qateel reg_admin
+POST http://localhost:8080/api/auth/reg/admin
+Content-Type: application/json
+
+{
+  "username": "trasharia",
+  "password": "checkcheck"
+}
+
+###
+#@qateel get_me
+#@attach-cookie-jar
+GET http://localhost:8080/api/auth/me
+
+###
+#@qateel create_user
+#@attach-cookie-jar
+POST http://localhost:8080/api/auth/create/user
+Content-Type: application/json
+
+{
+  "username": "heroher",
+  "password": "helpcheck",
+  "requesterUsername": "adminadmin"
+}
+
+###
+#@qateel login
+#@attach-cookie-jar
+POST http://localhost:8080/api/auth/login
+Content-Type: application/json
+
+{
+  "username": "heroher",
+  "password": "helpaddaibi"
+}
+
+###
+#@qateel delete_user
+#@attach-cookie-jar
+DELETE http://localhost:8080/api/auth/delete/user
+Content-Type: application/json
+
+{
+
+	"targetUsername": "heroher",
+  "requesterUsername": "adminadmin"
+}
+
+
+###
+#@qateel get_option
+#@attach-cookie-jar
+POST http://localhost:8080/api/aria2/gid/get/options
+Content-Type: application/json
+X-CSRF-Token: {{decoded_token}}
+
+{
+  "gid": "33895440383f8b8f"
+}
+
+
+###
+GET http://clients3.google.com/generate_204
+
+
+###
+#@qateel change_password
+#@attach-cookie-jar
+POST http://localhost:8080/api/auth/password/change
+Content-Type: application/json
+
+{
+
+}
+
+###
+#@qateel gen_admin_pass_reset_token
+#@attach-cookie-jar
+POST http://localhost:8080/api/auth/admin/gen_password_reset_token
+Content-Type: application/json
+
+{
+	"username": "adminadmin"
+}
+
+###
+#@qateel reset_admin_password
+#@attach-cookie-jar
+POST http://localhost:8080/api/auth/admin/reset_password
+Content-Type: application/json
+
+{
+	"username": "adminadmin",
+	"resetToken": "adminadmin:1780820812:c3dvGm3s6rHihX4TeYdxFfbJ0-86grvBpZno6NOuFa4",
+	"newPassword": "checkcheck"
+}
+
+
+###
+#@qateel change_password
+#@attach-cookie-jar
+POST http://localhost:8080/api/auth/password/change
+Content-Type: application/json
+
+{
+	"currentPassword": "checkchck",
+	"newPassword": "checkcheck"
+}
+
+###
+#@qateel logout
+#@attach-cookie-jar
+POST http://localhost:8080/api/auth/logout
+Content-Type: application/json
+X-CSRF-Token: {{decoded_csrf_token}}
+
+{
+
+}
+
+### Authentication
+POST http://localhost:8080/api/auth/login
+Content-Type: application/json
+
+{
+  "username": "trasharia",
+  "password": "checkcheck"
+}
+
+
+> {% lang=lua
+  client.global.csrf_token = response.cookies["csrf_token"].value
+  client.global.decoded_csrf_token = vim.uri_decode(client.global.csrf_token)
+
+  client.global.auth_token = response.cookies["auth_token"].value
+  client.global.decoded_auth_token = vim.uri_decode(client.global.auth_token)
+%}
+
+
+### Dashboard
+run #Authentication
+GET http://localhost:5173/dashboard
+Cookie: csrf_token={{decoded_csrf_token}}
+
+
+###
+#@qateel_set_cmd_options
+#@attach-cookie-jar
+POST http://localhost:8080/api/aria2/cmd/set/options
+Content-Type: application/json
+X-CSRF-Token: {{decoded_csrf_token}}
+
+{
+	"options" : {
+		"daemon": "true"
+	}
+}
+
+###
+#@qateel get_global_option
+#@attach-cookie-jar
+GET http://localhost:8080/api/aria2/global/get/options
+Content-Type: application/json
+X-CSRF-Token: {{decoded_csrf_token}}
+
+
+###
+#@qateel set_option
+#@attach-cookie-jar
+POST http://localhost:8080/api/aria2/global/set/options
+Content-Type: application/json
+X-CSRF-Token: {{decoded_csrf_token}}
+
+{
+	"options" : {
+		"max-concurrent-downloads": "80"
+	}
+}
+
+
+###
+
+GET http://localhost:8080/dashboard
+
+
+
+
+
+
+trasharia
+checkcheck
+
+
+
+
+
+
+####
+
+# {
+#   "amChoking": "true",
+#   "bitfield": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff80",
+#   "downloadSpeed": "119077",
+#   "ip": "217.136.2.254",
+#   "peerChoking": "false",
+#   "peerId": "%2DBT7b0W%2D%7D%B8%14%7F%E7%1B%86%F5%D0F%06%E9",
+#   "port": "27959",
+#   "seeder": "true",
+#   "uploadSpeed": "0"
+# }

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM download_history WHERE gid = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "8886b8a273fa9779e43fd9a71c2dfa643f0b8632df78536091face7e183ec4a9"
+}

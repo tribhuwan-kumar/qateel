@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n\t\t\t\t\t\t\t\t\tUPDATE download_history\n\t\t\t\t\t\t\t\t\tSET options = ?\n\t\t\t\t\t\t\t\t\tWHERE gid = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "2e5d4a104a05036a27243c3c610120af1e2eb9ebadb16d2b30353c443ef608da"
+}

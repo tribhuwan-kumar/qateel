@@ -1,0 +1,13 @@
+/target
+/trash
+*.env
+*cookie
+*.db*
+*.log
+*.bak
+*.crt
+*.key
+*.pem
+/qateel/auth
+/face/tests
+/qateel/torrents

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE download_history SET options = ? WHERE gid = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "258e653d5852f114f5365516abc32f04c58107b47a3f36e31e14b47f3385fd09"
+}

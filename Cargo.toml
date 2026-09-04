@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = ["qateel"]
+
+[profile.release]
+lto = true
+strip = true
+opt-level = 3
+panic = "abort"
+codegen-units = 1
+

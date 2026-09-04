@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "Qateel - Aria2 web ui",
+  "version": "1.0",
+  "description": "Intercepts downloads and routes them to Qateel or Firefox natively.",
+  "permissions": [
+    "downloads",
+    "storage",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/favicon.svg",
+      "32": "icons/favicon.svg"
+    }
+  },
+  "icons": {
+    "48": "icons/favicon.svg",
+    "96": "icons/favicon.svg"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"]
+    }
+  ],
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  }
+}

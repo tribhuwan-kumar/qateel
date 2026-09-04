@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT gid, name, files, dir, info_hash, source_uri\n            FROM download_history\n            WHERE (info_hash = $1 AND $1 IS NOT NULL)\n               OR (source_uri = $2 AND $2 IS NOT NULL)\n               OR (name = $3 AND $3 IS NOT NULL AND $3 != '' AND $3 != $4)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "gid",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "files",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "dir",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "info_hash",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "source_uri",
+        "ordinal": 5,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "adf2a6325895bcbe82842c4c5b0f00c7a843212f66425b27d86b03c3064aa134"
+}

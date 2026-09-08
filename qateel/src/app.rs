@@ -1,7 +1,8 @@
 use std::sync::Arc;
 use tokio::sync::watch;
-use tokio::sync::broadcast;
 use sqlx::{Pool, Sqlite};
+use tokio::sync::broadcast;
+use crate::his::buf::{ProgressBuffer, ActiveTasks};
 
 use crate::{
 	config::AppConf,
@@ -18,7 +19,11 @@ pub struct AppState {
     pub db: Pool<Sqlite>,
     pub aria2: Arc<Aria2Client>,
 	pub daemon: Arc<Aria2Daemon>,
+	pub active_tasks: ActiveTasks,
+	pub progress_buffer: ProgressBuffer,
+	pub shutdown_tx: broadcast::Sender<()>,
     pub status_tx: Arc<watch::Sender<SysStatus>>,
     pub history_tx: Arc<broadcast::Sender<DdlWsMessage>>,
     pub global_tx: Arc<broadcast::Sender<GlobalStatWsMessage>>,
 }
+

@@ -3,8 +3,10 @@
 	import { HugeiconsIcon } from "@hugeicons/svelte";
   import * as Select from "$lib/components/ui/select";
   import * as Tooltip from "$lib/components/ui/tooltip";
+	import * as PopoverTooltip from '$lib/components/ui/popovertooltip';
   import { HelpCircleIcon } from "@hugeicons/core-free-icons";
   import type { AnyField } from "$lib/components/settings/options-schema";
+	import { aria2Info } from "$lib/aria2/client.svelte"
 
   let {
     schema,
@@ -56,26 +58,34 @@
 				{schema.label}
 			</Label>
 			{#if schema.description}
-				<Tooltip.Root>
-					<Tooltip.Trigger>
-						<button
-							type="button"
-							class="inline-flex cursor-pointer items-center text-muted-foreground hover:text-foreground"
-						>
-							<HugeiconsIcon
-								icon={HelpCircleIcon}
-								strokeWidth={2} class="size-3.5"
-							/>
-						</button>
-					</Tooltip.Trigger>
-					<Tooltip.Content
-						side="top"
-						class="max-w-xs z-[200]">
-						<p class="text-xs">
-							{schema.description}
-						</p>
-					</Tooltip.Content>
-				</Tooltip.Root>
+				<Tooltip.Provider>
+					<PopoverTooltip.Root>
+						<PopoverTooltip.Trigger>
+							<button
+								type="button"
+								class="inline-flex cursor-pointer items-center text-muted-foreground hover:text-foreground"
+							>
+								<HugeiconsIcon
+									icon={HelpCircleIcon}
+									strokeWidth={2} class="size-3.5"
+								/>
+							</button>
+						</PopoverTooltip.Trigger>
+						<PopoverTooltip.Content
+							side="top"
+							class="max-w-xs text-wrap z-[200] font-medium">
+							{#if schema.key === 'checksum'}
+								<p class="text-xs">
+									{schema.description + `, possible hash algorithms [${$aria2Info?.hashAlgorithms}]`}
+								</p>
+							{:else}
+								<p class="text-xs">
+									{schema.description}
+								</p>
+							{/if}
+						</PopoverTooltip.Content>
+					</PopoverTooltip.Root>
+				</Tooltip.Provider>
 			{/if}
     </div>
 

@@ -27,11 +27,11 @@
 		CloudUploadIcon,
 		MoreVerticalCircle01Icon
 	} from "@hugeicons/core-free-icons";
-	import { aria2, aria2Store } from "$lib/aria2/client.svelte";
+	import { aria2, aria2Store, itemCounts } from "$lib/aria2/client.svelte";
 	import { selectedGids, clearSelection, toggleSelection, selectExclusive } from "$lib/selection";
 
 	type TableStatusFilter = "all" | GidStatus;
-	const statusFilters: TableStatusFilter[] = ["all", "active", "paused", "waiting", "complete", "removed", "stopped", "error"];
+	const statusFilters: TableStatusFilter[] = ["all", "active", "paused", "waiting", "complete", "seeding", "removed", "stopped", "error"];
 	let selectedStatus = $state<TableStatusFilter>("all");
 
 	/// Some state varibables
@@ -552,9 +552,10 @@ function handleStatusScrollState() {
 
 <div class="md:space-y-4 mt-4 relative">
 	<div
-		class="h-10 border-t bg-card/95 backdrop-blur z-1  supports-backdrop-filter:bg-card/60
-			border-l w-[-moz-available] w-[-webkit-fill-available] border-r top-18 my-0 sticky inline-block overflow-x-scroll max-sm:mx-2 mx-6 md:mx-10 rounded-t-2xl"
-	>
+		class="h-12 border-t bg-card/95 backdrop-blur z-1 supports-backdrop-filter:bg-card/60
+			border-l w-[-moz-available] w-[-webkit-fill-available] scrollbar-none border-r top-18 my-0 sticky inline-block overflow-x-scroll
+			max-sm:mx-2 mx-6 md:mx-10 rounded-t-2xl
+	">
 	<div
 			bind:this={statusScrollContainer}
 			onscroll={handleStatusScrollState}
@@ -571,13 +572,16 @@ function handleStatusScrollState() {
 							selectedStatus = status;
 							clearSelection();
 						}}
-						class={`text-[14px] w-full h-full font-medium transition-colors cursor-pointer
+						class={`text-[14px] w-full h-full flex flex-col items-center justify-center font-medium transition-colors cursor-pointer
 							${i !== statusFilters.length - 1 ? "border-r" : ""}
 							${selectedStatus === status ? "bg-[#DDA0DD]/30" : ""}
 							${i === 0 ? "rounded-tl-[14px]" : ""}
 							${i === statusFilters.length - 1 ? "rounded-tr-[14px]" : ""}`}
 					>
 						{status.charAt(0).toUpperCase() + status.slice(1)}
+						{#if $itemCounts?.byCategory.everything > 20}
+							<span class="text-[10px]">{`{0}`}</span>
+						{/if}
 					</button>
 				{/each}
 			</div>
@@ -598,31 +602,37 @@ function handleStatusScrollState() {
 						onclick={(e) => handleRowClick(e, item.gid)}
 						data-selected={$selectedGids.includes(item.gid)}
 						style={getRowStyle(item)}
-						class="cursor-pointer h-16 max-h-fit bg-blend-darken transition-colors hover:bg-muted/50 data-[selected=true]:bg-[#DDA0DD]/40 border-xl"
+						class="cursor-pointer h-[75px] max-h-fit bg-blend-darken transition-colors hover:bg-muted/50 data-[selected=true]:bg-[#DDA0DD]/40 border-xl"
 					>
-						<td class="xs:w-12 xs:h-16 h-[inherit] w-8 flex-row flex justify-center items-center">
-							<img src={getIcon(item)} alt="svg-icon" aria-hidden="true" class="w-7 shrink-0" />
+						<td class="xs:w-12 xs:h-16 h-[inherit] w-8
+							flex justify-center items-center">
+							<img
+								src={getIcon(item)}
+								alt="svg-icon"
+								aria-hidden="true"
+								class="w-5 sm:w-7 xs:w-6 shrink-0"
+							/>
 						</td>
 						<td class="lg:min-w-[70%]">
 							<div class="flex flex-col min-h-10 justify-center w-full">
 								<!-- // visible till xs -->
 								<span
 									title={item.name || item.gid}
-									class="font-medium block xs:hidden text-[14px] float-left max-w-[90%]"
+									class="font-medium block xs:hidden text-[13px] float-left max-w-[100%]"
 								>
-									{(item.name?.length ?? 0) > 20 ? `${item.name?.slice(0, 25)}...${item.name?.slice(-6)}` : item.name || "<Untitled>"}
+									{(item.name?.length ?? 0) > 15 ? `${item.name?.slice(0, 25)}...${item.name?.slice(-6)}` : item.name || "<Untitled>"}
 								</span>
 								<!-- // visible till sm -->
 								<span
 									title={item.name || item.gid}
-									class="font-medium block max-xs:hidden sm:hidden text-[15px] float-left"
+									class="font-medium block max-xs:hidden sm:hidden text-[14px] float-left"
 								>
 									{(item.name?.length ?? 0) > 30 ? `${item.name?.slice(0, 30)}...${item.name?.slice(-4)}` : item.name || "<Untitled>"}
 								</span>
 								<!-- // visible between upper xs and md -->
 								<span
 									title={item.name || item.gid}
-									class="font-medium block max-sm:hidden md:hidden text-[15px] float-left"
+									class="font-medium block max-sm:hidden md:hidden text-[14px] float-left"
 								>
 									{(item.name?.length ?? 0) > 40 ? `${item.name?.slice(0, 40)}...${item.name?.slice(-8)}` : item.name || "<Untitled>"}
 								</span>
@@ -637,16 +647,16 @@ function handleStatusScrollState() {
 								{#if item.status === "error"}
 									<div class="flex items-center mt-0.5 text-[12px] text-muted-foreground gap-2">
 										<span
-											class="flex items-center md:font-semibold gap-0.5 text-[12px] text-destructive max-w-[300px]"
+											class="flex items-center md:font-medium gap-0.5 text-[12px] text-destructive max-w-[300px]"
 										>
 											<span class="flex items-center">
 												<span class="sm:hidden">
 													{#if item.status && item.status !== null}
-														{item.status.charAt(0).toUpperCase() + item.status.slice(1)} |
+														{item.status.charAt(0).toUpperCase() + item.status.slice(1)} &nbsp; | &nbsp;
 													{/if}
 												</span>
 												{#if item.completedLength && item.completedLength !== "0"}
-													{getPercentage(item.completedLength!, item.totalLength!)} |
+													{getPercentage(item.completedLength!, item.totalLength!)} &nbsp; | &nbsp;
 												{/if}
 												{#if item.completedLength && item.completedLength !== "0"}
 													{formatBytes(item.completedLength)}
@@ -655,12 +665,13 @@ function handleStatusScrollState() {
 													{formatBytes(item.totalLength)}
 												{/if}
 												{#if item.uploadLength && item.uploadLength !== "0"}
-													| <HugeiconsIcon
+													&nbsp; | &nbsp;
+													<HugeiconsIcon
 														icon={CloudUploadIcon}
 														size={15}
 														color="currentColor"
 														strokeWidth={1.5}
-														class="mx-1"
+														class="mx-0.5"
 													/>
 													{formatBytes(item.uploadLength)}
 												{/if}
@@ -668,34 +679,89 @@ function handleStatusScrollState() {
 										</span>
 									</div>
 								{:else}
-									<div
-										class="flex items-center text-[12px] font-medium text-muted-foreground gap-2 mt-1"
-									>
+									<div class="flex items-center text-[12px] text-muted-foreground gap-2 mt-1">
 										{#if (item.completedLength && item.completedLength !== "0") || item.totalLength !== "0"}
-											<span class="flex md:font-semibold items-center gap-0.5">
+											<div class="max-sm:hidden flex md:font-medium tracking-wide items-center gap-0.5">
 												{#if item.completedLength && item.completedLength !== "0"}
-													{getPercentage(item.completedLength!, item.totalLength!)} |
+													<span>
+														{getPercentage(item.completedLength!, item.totalLength!)}
+														&nbsp; | &nbsp;
+													</span>
 												{/if}
 												{#if item.completedLength && item.completedLength !== "0"}
-													{formatBytes(item.completedLength)}
+													<span>
+														{formatBytes(item.completedLength)}
+													</span>
 												{/if}
 												{#if item.totalLength && item.totalLength !== "0"}
-													{`${item.completedLength && item.completedLength !== "0" ? "/" : ""} ${formatBytes(item.totalLength)}`}
+													<span>
+														{`${item.completedLength && item.completedLength !== "0" ? "/" : ""} ${formatBytes(item.totalLength)}`}
+													</span>
 												{/if}
 												{#if item.uploadLength && item.uploadLength !== "0"}
-													| <HugeiconsIcon
-														icon={CloudUploadIcon}
-														size={15}
-														color="currentColor"
-														strokeWidth={1.5}
-														class="mx-1"
-													/>
-													{formatBytes(item.uploadLength)}
+													<span class="flex flex-row items-center">
+														&nbsp; | &nbsp;
+														<HugeiconsIcon
+															icon={CloudUploadIcon}
+															size={15}
+															color="currentColor"
+															strokeWidth={1.5}
+															class="mx-0.5"
+														/>
+														{formatBytes(item.uploadLength)}
+													</span>
 												{/if}
 												{#if item.status === "complete" && item.completedAt}
-													| {formatDate(item.completedAt)}
+													<span>
+														&nbsp; | &nbsp;
+														{formatDate(item.completedAt)}
+													</span>
 												{/if}
-											</span>
+											</div>
+
+											<div class="sm:hidden flex flex-wrap font-medium text-[11px] tracking-wide items-center gap-0.5">
+												{#if item.completedLength && item.completedLength !== "0" && item.status !== "complete" }
+													<span>
+														{getPercentage(item.completedLength!, item.totalLength!)}
+														&nbsp; | &nbsp;
+													</span>
+												{/if}
+												{#if item.completedLength && item.completedLength !== "0"}
+													<span>
+														{formatBytes(item.completedLength)}
+													</span>
+												{/if}
+												{#if item.status !== "complete" && item.totalLength && item.totalLength !== "0" }
+													<span>
+														{`${item.completedLength && item.completedLength !== "0" ? "/" : ""} ${formatBytes(item.totalLength)}`}
+													</span>
+												{/if}
+												{#if item.uploadLength && item.uploadLength !== "0"}
+													<span class="flex flex-row items-center">
+														&nbsp; | &nbsp;
+														<HugeiconsIcon
+															icon={CloudUploadIcon}
+															size={15}
+															color="currentColor"
+															strokeWidth={1.5}
+															class="mx-0.5"
+														/>
+														{formatBytes(item.uploadLength)}
+													</span>
+												{/if}
+												{#if item.status && item.status !== null}
+													<span>
+														&nbsp; | &nbsp;
+														{item.status.charAt(0).toUpperCase() + item.status.slice(1)}
+													</span>
+												{/if}
+												{#if item.status === "complete" && item.completedAt}
+													<span>
+														&nbsp; | &nbsp;
+														{formatDate(item.completedAt)}
+													</span>
+												{/if}
+											</div>
 										{/if}
 									</div>
 								{/if}
@@ -706,12 +772,12 @@ function handleStatusScrollState() {
 							<div class="gap-2 flex flex-col items-center justify-center">
 								<Badge
 									variant="outline"
-									class={`${getStatusClass(item.status)} rounded-xl w-24 shadow-sm`}
+									class={`${getStatusClass(item.status)} rounded-xl w-24 py-[12px] shadow-sm`}
 								>
 									{item.status.toUpperCase()}
 								</Badge>
 								<span
-									class="flex flex-row align-baseline font-semibold text-[12px] items-center gap-0.5 text-muted-foreground"
+									class="flex flex-row align-baseline font-medium tracking-wide text-[12px] items-center gap-0.5 text-muted-foreground"
 								>
 									{#if item.downloadSpeed && item.downloadSpeed !== "0"}
 										{formatSpeed(item.downloadSpeed)}
@@ -780,7 +846,7 @@ function handleStatusScrollState() {
 									{/if}
 									{#if ["error", "stopped", "removed"].includes(item.status)}
 										<DropdownMenu.Item
-											title="Retry to download again"
+											title="Retry to error"
 											onclick={() => handleRetry(item)}
 											class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
 												pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
@@ -832,7 +898,7 @@ function handleStatusScrollState() {
 											class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
 												pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
 										>
-											Download again
+											Redownload
 										</DropdownMenu.Item>
 									{/if}
 									{#if ["seeding"].includes(item.status)}
@@ -853,15 +919,6 @@ function handleStatusScrollState() {
 											Details
 										</DropdownMenu.Item>
 									{/if}
-									{#if ["complete", "seeding"].includes(item.status)}
-										<DropdownMenu.Item
-											onclick={() => {}}
-											class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
-												pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
-										>
-											Open file
-										</DropdownMenu.Item>
-									{/if}
 									{#if item.kind === "uri" || item.sourceUri?.startsWith("magnet")}
 										<DropdownMenu.Item
 											onclick={() => navigator.clipboard.writeText(item.sourceUri!)}
@@ -872,7 +929,10 @@ function handleStatusScrollState() {
 										</DropdownMenu.Item>
 									{/if}
 									<DropdownMenu.Item
-										onclick={() => navigator.clipboard.writeText(item.files!)}
+										onclick={() => {
+											let filesArr = JSON.parse(item.files!);
+											navigator.clipboard.writeText(filesArr[0].replace(/\.$/, ""))
+										}}
 										class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
 											pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
 									>
@@ -899,7 +959,7 @@ function handleStatusScrollState() {
 					</tr>
 				{:else}
 					<tr>
-						<td colspan="5" class="h-140 text-center text-muted-foreground">
+						<td colspan="5" class="h-[80svh] text-center text-muted-foreground">
 							<span class="text-wrap font-normal max-md:text-[16px]">
 								No downloads found {`in category ${$selectedCategory ? $selectedCategory + `${" "} ${"and status"} ${selectedStatus}${"..."}` : ""}`}
 							</span>

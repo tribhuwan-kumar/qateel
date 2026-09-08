@@ -1,6 +1,6 @@
 import type { Aria2Options } from "$lib/aria2/types";
 
-// Reuse the same icons from your global settings
+// Reuse the same icons from global settings
 export type SettingsIconKey =
 	| "http"
 	| "link"
@@ -110,14 +110,14 @@ export const gidOptionsSections: OptionSection[] = [
 				label: "dir",
 				type: "text",
 				description: "The directory to store the downloaded file.",
-				placeholder: "/etc/downloads"
+				placeholder: ""
 			},
 			{
 				key: "out",
 				label: "out",
 				type: "text",
 				description: "The file name of the downloaded file. (Ignored for Torrents)",
-				placeholder: "file.zip",
+				placeholder: "",
 				showFor: ["uri", "unknown"]
 			},
 			{
@@ -156,7 +156,7 @@ export const gidOptionsSections: OptionSection[] = [
 				key: "checksum",
 				label: "checksum",
 				type: "text",
-				description: "Verify file using hash (e.g. sha-256=...).",
+				description: "Verify file using hash",
 				placeholder: "sha-256=...",
 				showFor: ["uri", "unknown"]
 			},

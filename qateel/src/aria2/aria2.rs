@@ -78,7 +78,7 @@ impl Aria2Worker {
             pending_requests: Arc::new(Mutex::new(HashMap::new())),
         });
 
-		// wait a little till aria2 daemon starts
+		// Wait a little till aria2 daemon starts
         sleep(Duration::from_millis(500)).await;
 
         loop {

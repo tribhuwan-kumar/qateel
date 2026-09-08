@@ -55,7 +55,7 @@ pub async fn reg_admin(
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({
-                "error": "Username must be longer than 6 characters and contain only letters, numbers, and underscores"
+                "error": "Username must be longer than 6 characters and contain only letters, numbers, and underscores."
             })),
         );
     }
@@ -77,7 +77,7 @@ pub async fn reg_admin(
         },
         Err(AuthError::AdminAlreadyRegistered) => (
             StatusCode::FORBIDDEN,
-            Json(json!({ "error": "Admin already registered" }))
+            Json(json!({ "error": "Admin already registered." }))
         ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -98,7 +98,7 @@ pub async fn create_user(
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({
-                "error": "Username must be longer than 6 characters and contain only letters, numbers, and underscores"
+                "error": "Username must be longer than 6 characters and contain only letters, numbers, and underscores."
             })),
         );
     }
@@ -111,7 +111,7 @@ pub async fn create_user(
         );
     }
     if auth.role != Role::Admin {
-        return (StatusCode::FORBIDDEN, Json(json!({ "error": "User can only be created by admins"})));
+        return (StatusCode::FORBIDDEN, Json(json!({ "error": "User can only be created by admins."})));
     }
 
     match AuthController::create_user(
@@ -129,7 +129,7 @@ pub async fn create_user(
         }))),
         Err(AuthError::Unauthorized) => (
             StatusCode::FORBIDDEN,
-            Json(json!({ "error": "Unauthorized" })),
+            Json(json!({ "error": "Unauthorized." })),
         ),
         Err(e) => (
             StatusCode::BAD_REQUEST,
@@ -167,11 +167,11 @@ pub async fn change_password(
         ),
         Err(AuthError::InvalidCredentials) => (
             StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "Invalid current password" })),
+            Json(json!({ "error": "Invalid current password." })),
         ),
         Err(AuthError::UserNotFound) => (
             StatusCode::NOT_FOUND,
-            Json(json!({ "error": "User not found" })),
+            Json(json!({ "error": "User not found." })),
         ),
         Err(e) => (
             StatusCode::BAD_REQUEST,
@@ -207,15 +207,15 @@ pub async fn admin_change_user_password(
         ),
         Err(AuthError::InvalidRole) => (
             StatusCode::FORBIDDEN,
-            Json(json!({ "error": "Can only change user password" })),
+            Json(json!({ "error": "Can only change user password." })),
         ),
         Err(AuthError::Unauthorized) => (
             StatusCode::FORBIDDEN,
-            Json(json!({ "error": "Unauthorized" })),
+            Json(json!({ "error": "Unauthorized." })),
         ),
         Err(AuthError::UserNotFound) => (
             StatusCode::NOT_FOUND,
-            Json(json!({ "error": "User not found" })),
+            Json(json!({ "error": "User not found." })),
         ),
         Err(e) => (
             StatusCode::BAD_REQUEST,
@@ -245,7 +245,7 @@ pub async fn gen_admin_pass_reset_token(
             StatusCode::FORBIDDEN,
             Json(json!({
 				"username": &payload.username,
-				"error": "Invalid role for generating reset password token"
+				"error": "Invalid role for generating reset password token."
 			})),
         ),
         Err(e) => (
@@ -278,15 +278,15 @@ pub async fn reset_admin_password(
         ),
         Err(AuthError::InvalidResetToken) => (
             StatusCode::FORBIDDEN,
-            Json(json!({ "error": "Invalid reset token" })),
+            Json(json!({ "error": "Invalid reset token." })),
         ),
         Err(AuthError::AdminNotFound) => (
             StatusCode::NOT_FOUND,
-            Json(json!({ "error": "Admin not found" })),
+            Json(json!({ "error": "Admin not found." })),
         ),
         Err(AuthError::ResetTokenFileError) => (
             StatusCode::NOT_FOUND,
-            Json(json!({ "error": "Reset token file not found" })),
+            Json(json!({ "error": "Reset token file not found." })),
         ),
         Err(e) => (
             StatusCode::BAD_REQUEST,
@@ -318,7 +318,7 @@ pub async fn delete_user(
         ),
 		Err(AuthError::Unauthorized) => (
 			StatusCode::UNAUTHORIZED,
-			Json(json!({ "error": "Failed to delete the username" }))
+			Json(json!({ "error": "Failed to delete the username." }))
 		),
 		Err(AuthError::CannotDeleteSelf) => (
 			StatusCode::FORBIDDEN,
@@ -364,7 +364,7 @@ pub async fn login(
                     return Err((
                         StatusCode::NOT_FOUND,
                         Json(json!({
-                            "error": format!("username not found {}", username)
+                            "error": format!("Username not found: {}", username)
                         })),
                     ));
                 }

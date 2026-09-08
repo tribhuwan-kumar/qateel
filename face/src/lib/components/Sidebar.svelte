@@ -8,16 +8,20 @@
 	import * as Select from "$lib/components/ui/select";
 	import { logout, authState } from "$lib/auth/auth.svelte";
 	import Label from "$lib/components/ui/label/label.svelte";
+	import type { Aria2GlobalOptions } from "$lib/aria2/types";
 	import ThemeToggle from "$lib/components/ThemeToggle.svelte";
-	import { aria2, aria2Store } from "$lib/aria2/client.svelte";
 	import * as Collapsible from "$lib/components/ui/collapsible";
 	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
-	import type { Aria2GlobalOptions } from "$lib/aria2/types";
 	import GlobalOptions from "$lib/components/settings/GlobalOptions.svelte";
+	import { aria2, itemCounts } from "$lib/aria2/client.svelte";
+	import Aria2Info from "$lib/components/Aria2Info.svelte"
+	import App from "../../assets/svgs/app.svg"
+	import AppLight from "../../assets/svgs/app-light.svg"
+	import Aria2 from "../../assets/svgs/aria2.svg"
+	import Aria2Light from "../../assets/svgs/aria2-light.svg"
   import {
 		downloadIcons,
-		getItemCategory,
 		selectedCategory,
     type DownloadCategory
 	} from "$lib/categorize";
@@ -26,6 +30,7 @@
     Folder01Icon,
     ArrowUp01Icon,
     HelpCircleIcon,
+		FloppyDiskIcon,
     Settings01Icon,
     ArrowDown01Icon,
     BitcoinCircleIcon
@@ -33,9 +38,9 @@
 
   let { children }: { children?: Snippet } = $props();
 
-  let timer: ReturnType<typeof setTimeout> | undefined;
   let isDarkMode = $state(false);
   let showMoreDialog = $state(false);
+  let showAria2InfoDialog = $state(false);
 	let username = $derived(authState.username);
 	let role = $derived(authState.role);
   let isAria2Alive = $derived($systemState.status?.aria2Alive);
@@ -61,7 +66,8 @@
   type RangeSettingKey =
     | "maxConcurrentDownloads"
     | "maxOverallDownloadLimit"
-    | "maxOverallUploadLimit";
+    | "maxOverallUploadLimit"
+    | "maxTries";
 
   type RangeControl = {
     key: RangeSettingKey;
@@ -84,6 +90,16 @@
       step: 1,
       encode: (value) => String(value),
       format: (value) => String(value)
+    },
+    {
+      key: "maxTries",
+      optionKey: "max-tries",
+      label: "Max tries",
+      min: 0,
+      max: 100,
+      step: 1,
+      encode: (value) => String(value),
+			format: (v) => (v === 0 ? "Unlimited" : `${v}`)
     },
     {
       key: "maxOverallDownloadLimit",
@@ -118,30 +134,24 @@
 		dir: "",
     logLevel: "",
     saveSession: "",
+		maxTries: 5,
     maxConcurrentDownloads: 5,
     maxOverallDownloadLimit: 0,
     maxOverallUploadLimit: 0
   });
 
-	let itemMetadataStore = $derived(aria2Store.items);
-
   let categoryCounts = $derived.by(() => {
-    const counts: Record<DownloadCategory, number> = {
-      everything: itemMetadataStore.length,
-      torrent: 0,
-      music: 0,
-      photos: 0,
-      programs: 0,
-      videos: 0,
-      subtitles: 0,
-      compressed: 0,
-      others: 0
+    const counts = {
+      everything: $itemCounts?.byCategory.everything,
+      torrent: $itemCounts?.byCategory.torrent,
+      music: $itemCounts?.byCategory.music,
+      photos: $itemCounts?.byCategory.photos,
+      programs: $itemCounts?.byCategory.programs,
+      videos: $itemCounts?.byCategory.videos,
+      subtitles: $itemCounts?.byCategory.subtitles,
+      compressed: $itemCounts?.byCategory.compressed,
+      others: $itemCounts?.byCategory.others,
     };
-
-    for (const item of itemMetadataStore) {
-      const category = getItemCategory(item);
-      counts[category] += 1;
-    }
 
     return counts;
   });
@@ -165,8 +175,8 @@
       quickSettings.dir = options["dir"] ?? "";
       quickSettings.logLevel = options["log-level"] ?? "notice";
       quickSettings.saveSession = options["save-session"] ?? "";
+      quickSettings.maxTries = Number(options["max-tries"] ?? 5);
       quickSettings.maxConcurrentDownloads = Number(options["max-concurrent-downloads"] ?? 5);
-
       // Decode raw aria strings ("5M", "100K", "0") into KiB/s
       quickSettings.maxOverallDownloadLimit = decodeSpeed(options["max-overall-download-limit"]);
       quickSettings.maxOverallUploadLimit = decodeSpeed(options["max-overall-upload-limit"]);
@@ -223,7 +233,8 @@
 			}
     };
     update();
-    loadGlobalOptions();
+    await loadGlobalOptions();
+		await aria2.getItemsCount();
   });
 </script>
 
@@ -267,9 +278,11 @@
                       <span class={$selectedCategory === item.key ? "text-primary font-medium" : "text-muted-foreground"}>
                         {item.label}
                       </span>
-                      <span class={$selectedCategory === item.key ? "text-primary ml-auto text-xs font-semibold" : "ml-auto text-xs text-muted-foreground opacity-70"}>
-                        {categoryCounts[item.key] ?? 0}
-                      </span>
+											{#if $itemCounts?.byCategory.everything > 20}
+												<span class={$selectedCategory === item.key ? "text-primary ml-auto text-xs font-semibold" : "ml-auto text-xs text-muted-foreground opacity-70"}>
+													{`{${categoryCounts[item.key] ?? 0}}`}
+												</span>
+											{/if}
                     </Sidebar.MenuSubButton>
                   </Sidebar.MenuSubItem>
                 {/each}
@@ -301,8 +314,8 @@
                 <div class="space-y-3 pt-1">
                   {#each rangeControls as control (control.key)}
                     <div class={`rounded-xl border border-sidebar-border bg-sidebar-background/80 p-3 space-y-2 ${!isAria2Alive ? "cursor-not-allowed!" : ""}`}>
-                      <div class="flex items-center justify-between">
-                        <Label class="block text-xs font-medium tracking-wide text-sidebar-foreground/70">
+                      <div class="flex flex-row items-center justify-between">
+                        <Label class="block w-[60%] text-xs text-wrap font-medium text-sidebar-foreground/70">
                           {control.label}
                         </Label>
                         <span class="text-xs text-muted-foreground">
@@ -336,6 +349,9 @@
                       <input
                         type="text"
                         value={quickSettings[control.key]}
+                        oninput={(e) => {
+													quickSettings[control.key] = e.currentTarget.value;
+                        }}
                         onchange={(e) => {
                           quickSettings[control.key] = e.currentTarget.value;
                           pushSetting(control.optionKey, e.currentTarget.value);
@@ -419,18 +435,33 @@
             </Collapsible.Trigger>
             <Collapsible.Content>
               <Sidebar.MenuSub>
-                <Sidebar.MenuSubItem>
+                <Sidebar.MenuSubItem onclick={() => showAria2InfoDialog = true}>
                   <Sidebar.MenuSubButton class="cursor-pointer text-muted-foreground!">
+										<img
+											alt="Aria2 icon"
+											src={isDarkMode ? Aria2Light : Aria2}
+											class="w-4 h-4"
+										/>
                     Aria2
                   </Sidebar.MenuSubButton>
                 </Sidebar.MenuSubItem>
                 <Sidebar.MenuSubItem>
                   <Sidebar.MenuSubButton class="cursor-pointer text-muted-foreground!">
+										<img
+											alt="Qateel icon"
+											src={isDarkMode ? AppLight : App}
+											class="w-4 h-4"
+										/>
                     Qateel
                   </Sidebar.MenuSubButton>
                 </Sidebar.MenuSubItem>
                 <Sidebar.MenuSubItem>
                   <Sidebar.MenuSubButton class="cursor-pointer text-muted-foreground!">
+										<HugeiconsIcon
+											icon={FloppyDiskIcon}
+											strokeWidth={2}
+											class="w-4 h-4"
+										/>
                     Storage
                   </Sidebar.MenuSubButton>
                 </Sidebar.MenuSubItem>
@@ -546,5 +577,12 @@
   </div>
 </Sidebar.Inset>
 
-<GlobalOptions bind:open={showMoreDialog} onsave={loadGlobalOptions} />
+<GlobalOptions
+	bind:open={showMoreDialog}
+	onsave={loadGlobalOptions}
+/>
+
+<Aria2Info
+	bind:open={showAria2InfoDialog}
+/>
 

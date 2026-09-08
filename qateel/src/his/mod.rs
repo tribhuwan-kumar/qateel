@@ -1,5 +1,6 @@
 pub mod ws;
+pub mod buf;
+pub mod probe;
 pub mod hasher;
-pub mod header;
 pub mod extract;
 pub mod service;

@@ -6,7 +6,6 @@
   import { Label } from "$lib/components/ui/label";
   import { HugeiconsIcon } from "@hugeicons/svelte";
   import { Button } from "$lib/components/ui/button";
-  import { Textarea } from "$lib/components/ui/textarea";
 	import ProbeUriDialog from "$lib/components/ProbeUri.svelte";
   import {
     Tabs,
@@ -80,7 +79,7 @@
             };
           })
         );
-        console.log("Adding batch torrents:", { torrents: processedTorrents });
+        console.log("Adding torrents:", { torrents: processedTorrents });
         await aria2.addTorrents(processedTorrents);
       }
 
@@ -156,7 +155,10 @@
 
     if (uniqueNewFiles.length > 0) {
       selectedFiles = [...selectedFiles, ...uniqueNewFiles];
-      toast.success(`Selected ${uniqueNewFiles.length} torrents`, {
+      // toast.success(`Selected ${uniqueNewFiles.length} torrent(s)`, {
+					toast.success(`Selected
+					${uniqueNewFiles.length === 1 ?
+					"a torrent file." : `${uniqueNewFiles.length} torrents.`}`, {
         richColors: true,
         style: "cursor: pointer;"
       });
@@ -170,16 +172,25 @@
 
 </script>
 
-<Dialog bind:open={open} onOpenChange={(v) => !v && onclose()}>
-  <DialogContent class="sm:max-w-150 sm:h-120" showCloseButton={false}>
-    <DialogHeader>
-      <DialogTitle>Add download</DialogTitle>
+<Dialog
+	bind:open={open} onOpenChange={(v) => !v && onclose()}>
+  <DialogContent
+		class="sm:max-w-150 sm:h-120 py-5 px-8 bg-background/95 dark:bg-background/60
+		supports-backdrop-filter:bg-background/90 dark:supports-backdrop-filter:bg-background/60 backdrop-blur-xl"
+		showCloseButton={false}
+	>
+    <DialogHeader class="shrink-0 pb-2 relative after:absolute after:bottom-0 after:left-0 after:h-[1px] after:w-full
+				after:bg-gradient-to-r after:from-transparent after:via-sidebar-border after:to-transparent">
+      <DialogTitle class="text-lg font-semibold">Add to download...</DialogTitle>
       <DialogDescription>
         Paste links or upload <span class="italic">.torrent</span> files
       </DialogDescription>
     </DialogHeader>
 
-    <Tabs bind:value={activeTab} class="sm:w-full sm:h-72">
+    <Tabs
+			bind:value={activeTab}
+			class="sm:w-full sm:h-72"
+		>
       <TabsList class="grid w-full grid-cols-2">
         <TabsTrigger value="link" class="cursor-pointer!">
           <HugeiconsIcon
@@ -202,11 +213,13 @@
       <TabsContent value="link" class="space-y-4 py-4">
         <div class="space-y-2">
            <Label>Download URLs</Label>
-           <Textarea
-             placeholder="https://... magnet:?xt=... ftp://... sftp://... "
-             class="h-[150px] sm:min-h-[150px] sm:max-h-[240px] text-xs"
-             bind:value={urls}
-           />
+						<textarea
+							rows={4}
+							bind:value={urls}
+							placeholder="https://...  magnet:?xt=...  ftp://...  sftp://..."
+							class="w-full h-[150px] bg-muted/40 break-all sm:min-h-[150px] sm:max-h-[240px] resize-none rounded-2xl px-3 py-2 text-sm outline-none disabled:opacity-50 disabled:cursor-not-allowed
+								border border-muted-foreground/30 focus:ring-1 focus:ring-primary/30"
+						></textarea>
            <p class="text-xs text-muted-foreground">Supports multiple URIs</p>
         </div>
       </TabsContent>
@@ -214,7 +227,8 @@
       <TabsContent value="torrent" class="py-4 space-y-4">
         <button
           type="button"
-          class="border-2 mt-[14px] border-dashed rounded-lg min-h-[150px] w-full flex flex-col items-center justify-center text-center p-4 transition-colors cursor-pointer bg-transparent
+          class="mt-[14px] bg-muted/40 border rounded-2xl border-muted-foreground/30rounded-lg min-h-[150px] w-full flex flex-col items-center
+						justify-center text-center p-4 transition-colors cursor-pointer
           {dragActive ? 'border-primary bg-primary/5' : 'border-muted-foreground/25'}"
           ondragenter={handleDrag}
           ondragleave={handleDrag}
@@ -240,7 +254,7 @@
             multiple={true}
           />
         </button>
-        <p class="text-xs text-muted-foreground mt-1">You can add multiple files at once</p>
+        <p class="text-xs text-muted-foreground mt-1">You can add multiple files at once!!</p>
         {#if selectedFiles.length > 0}
           <div class="flex items-center justify-between bg-secondary/30 p-2 rounded-md animate-in fade-in slide-in-from-top-2">
             <span class="text-xs font-medium pl-2">{selectedFiles.length} files selected</span>
@@ -296,7 +310,10 @@
 </Dialog>
 
 <Dialog bind:open={showFileManageDialog}>
-  <DialogContent class="sm:min-w-[400px]">
+  <DialogContent
+		class="sm:min-w-[400px]"
+		showCloseButton={false}
+	>
     <DialogHeader>
       <DialogTitle>Selected files</DialogTitle>
     </DialogHeader>
@@ -355,7 +372,11 @@
         />
       </div>
 
-      <Button size="sm" onclick={() => showFileManageDialog = false}>
+      <Button
+				size="sm"
+				onclick={() => showFileManageDialog = false}
+				class="cursor-pointer"
+			>
         Done
       </Button>
     </DialogFooter>
@@ -363,8 +384,8 @@
 </Dialog>
 
 <ProbeUriDialog
+	uris={probeUris}
   bind:open={showProbeUriDialog}
-  uris={probeUris}
   onclose={() => showProbeUriDialog = false}
 />
 

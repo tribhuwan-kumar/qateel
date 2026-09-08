@@ -29,13 +29,13 @@
     document.getElementById("init-animation-style")?.remove();
     document.getElementById("init-loader-script")?.remove();
     getSysStatus();
-  });
 
-	if (dev) {
-		import('eruda').then((eruda) => {
-			eruda.default.init();
-		});
-	}
+		if (dev) {
+			import('eruda').then((eruda) => {
+				eruda.default.init();
+			});
+		}
+  });
 </script>
 
 <svelte:head>

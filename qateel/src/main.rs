@@ -30,13 +30,16 @@ use crate::{
     db::init_db,
     app::AppState,
     status::SysStatus,
+	his::buf::ActiveTasks,
+	his::buf::ProgressBuffer,
     aria2::types::Aria2Client,
 	aria2::daemon::Aria2Daemon,
     auth::types::AuthController,
     his::service::HistoryService,
 };
 
-const CHANNEL: usize = 256;
+const CHANNEL: usize = 128;
+const SHUTDOWN_CHANNEL: usize = 1;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -57,6 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     utils::intro();
 	utils::ensure_aria2_installation();
 
+    let (shutdown_tx, _) = broadcast::channel(SHUTDOWN_CHANNEL);
     let (aria2_resp_tx, _aria2_resp_rx) = broadcast::channel(CHANNEL);
     let (history_tx_rw, _history_rx_rw) = broadcast::channel(CHANNEL);
     let (global_tx_rw, _global_rx_rw) = broadcast::channel(CHANNEL);
@@ -98,12 +102,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         aria2_resp_tx.clone()
     );
 
+	let actv_tasks = ActiveTasks::new();
+	let progress_updater = ProgressBuffer::new();
+
     let state = AppState {
         db: db_pool.clone(),
 		config: conf.clone(),
 		status_tx: status_tx,
         jwt_secret: jwt_secret,
+		shutdown_tx: shutdown_tx,
 		daemon: Arc::new(aria2_daemon),
+		active_tasks: actv_tasks,
+		progress_buffer: progress_updater,
         aria2: Arc::new(aria2_client.clone()),
         history_tx: Arc::new(history_tx_rw),
         global_tx: Arc::new(global_tx_rw),
@@ -144,7 +154,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let app = api::routes(state, conf.cors_origins);
+    let app = api::routes(state.clone(), conf.cors_origins);
     let handle = axum_server::Handle::new();
     let shutdown_handle = handle.clone();
     let addr: SocketAddr = format!("{}:{}", &conf.host, &conf.port).parse()?;
@@ -189,13 +199,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        _ = tokio::signal::ctrl_c() => {
-            info!("Ctrl+C received, shutting down...");
-            shutdown_handle.graceful_shutdown(Some(Duration::from_secs(5)));
+        _ = utils::shutdown_signal() => {
+			info!("Shutdown signal received");
+
+			let _ = state.clone().shutdown_tx.send(());
+
+			HistoryService::progress_updater(state.clone()).await;
+			shutdown_handle.graceful_shutdown(Some(Duration::from_secs(5)));
 
             if let Err(e) = (&mut server).await {
                 error!("Server error during shutdown: {}", e);
             }
+
+            info!("Shutdown complete!!");
         }
     }
 

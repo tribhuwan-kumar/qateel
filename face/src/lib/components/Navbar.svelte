@@ -6,9 +6,11 @@
   import { Button } from "$lib/components/ui/button";
 	import AddDl from '$lib/components/AddDl.svelte';
   import * as Dialog from "$lib/components/ui/dialog";
+	import { JsonView } from '@zerodevx/svelte-json-view'
   import { Label } from "$lib/components/ui/label/index.js";
   import { Checkbox } from "$lib/components/ui/checkbox/index.js";
 	import * as SidebarUI from "$lib/components/ui/sidebar/index.js";
+  import SearchDialog from "$lib/components/SearchDialog.svelte";
   import {
     aria2,
 		aria2Store,
@@ -22,6 +24,7 @@
     PlayIcon,
     ListXIcon,
     PauseIcon,
+		Menu04Icon,
     Search02Icon,
     Cancel02Icon,
     Delete02Icon,
@@ -43,6 +46,7 @@
   let canStop = $derived(selectedItems.some(i => ['active', 'waiting', 'paused', 'error'].includes(i.status)));
 
   let deleteDialogOpen = $state(false);
+	let searchDialogOpen = $state(false);
   let deleteWithFiles = $state(false);
   let addDialogOpen = $state(false);
   let gidsToDelete = $state<string[]>([]);
@@ -93,7 +97,7 @@
   }
 
   function handleSearch() {
-
+		searchDialogOpen = true;
   }
 
   function handleSort() {
@@ -139,10 +143,12 @@
 </script>
 
 
-<div class="bg-background/95 backdrop-blur z-1  supports-backdrop-filter:bg-background/60 sticky top-0 w-full">
+<div class="bg-background/95 backdrop-blur z-1 supports-backdrop-filter:bg-background/90 dark:supports-backdrop-filter:bg-background/60 sticky top-0 w-full">
 	<div class="inline-flex flex-row">
-		<SidebarUI.Trigger class="m-2 text-muted-foreground bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60 sticky top-0 cursor-pointer" />
-
+		<SidebarUI.Trigger
+			class="m-2 text-muted-foreground bg-background/95 backdrop-blur
+				dark:supports-backdrop-filter:bg-background/60 supports-backdrop-filter:bg-background/90 sticky top-0 cursor-pointer"
+		/>
 		<div class="hidden sm:inline-flex justify-start float-left md:h-12 items-center md:px-4 gap-2">
 			<div class="flex items-center gap-4 text-sm text-muted-foreground">
 				{#if globalStats.downloadSpeed !== "0" || globalStats.uploadSpeed !== "0"}
@@ -150,7 +156,7 @@
 						variant="outline"
 						onclick={openGlobalStatsDialog}
 						title="Global downloading speed"
-						class="gap-1 px-2 py-3.5 min-w-32 cursor-pointer text-xs animate-in fade-in zoom-in duration-200"
+						class="gap-1 px-2 py-3.5 min-w-26 cursor-pointer text-xs animate-in fade-in zoom-in duration-200"
 					>
 						{#if globalStats.downloadSpeed !== "0"}
 							<HugeiconsIcon
@@ -189,7 +195,7 @@
             strokeWidth={1.5}
 						class="md:w-4.5 w-4"
           />
-          <span class="max-xs:text-[12px] text-xs">{count} Selected</span>
+          <span class="max-xs:text-[12px] text-xs">{count}&nbsp;&nbsp;Selected</span>
           <button
             onclick={clearSelection}
             class="md:ml-1 hover:bg-muted-foreground/20 rounded-xl p-0.5 cursor-pointer"
@@ -234,6 +240,7 @@
         strokeWidth={2}
       />
     </Button>
+		<!-- vertical seperator -->
     <div class="w-px h-6 mx-2 bg-border"></div>
     <Button
 			disabled={!isAria2Alive}
@@ -253,6 +260,7 @@
       bind:open={addDialogOpen}
       onclose={() => addDialogOpen = false}
     />
+		<SearchDialog bind:open={searchDialogOpen} />
 		<div class="w-px h-6 mx-2 bg-border hidden md:block"></div>
 		<!-- md screen action buttons -->
     <div class="items-center gap-1 hidden md:flex">
@@ -319,6 +327,25 @@
           class="w-4! h-4!"
         />
       </Button>
+
+			<div class="w-px h-6 mx-2 bg-border"></div>
+			<Button
+				class="cursor-pointer! disabled:cursor-not-allowed!"
+				size="icon"
+				variant="ghost"
+				title="More"
+			>
+			<!-- need: -->
+			<!-- pauseAll -->
+			<!-- resumeAll -->
+			<!-- StopAll -->
+			<!-- purgeDownloadResult -> removes completed/error/removed -->
+				<HugeiconsIcon
+					icon={Menu04Icon}
+					class="text-muted-foreground w-4! h-4!"
+					strokeWidth={2}
+				/>
+			</Button>
     </div>
   </div>
 </div>
@@ -379,8 +406,14 @@
 	open={showGlobalStatsDialog}
 	onOpenChange={(v) => showGlobalStatsDialog = v}
 >
-	<Dialog.Content showCloseButton={false} class="w-4xl h-[340px]">
-		<Dialog.Header class="flex flex-row items-start justify-between">
+	<Dialog.Content
+		showCloseButton={false}
+		class="w-4xl h-78 max-xs:h-85 md:max-h-76 bg-background/95 dark:bg-background/60
+			supports-backdrop-filter:bg-background/90	dark:supports-backdrop-filter:bg-background/60 backdrop-blur-xl"
+	>
+		<Dialog.Header class="flex pb-1 flex-row items-start justify-between relative after:absolute after:bottom-0
+			after:left-0 after:h-[1px] after:w-full after:bg-gradient-to-r after:from-transparent after:via-sidebar-border after:to-transparent
+		">
 			<div>
 					<Dialog.Title>Global stats</Dialog.Title>
 					<Dialog.Description class="mt-1">
@@ -388,13 +421,13 @@
 					</Dialog.Description>
 			</div>
 			<button
-				title="Toggle json view"
+				title="JSON view"
 				onclick={() => globalStatsView = globalStatsView === "table" ? "json" : "table"}
 				class={`cursor-pointer! w-8 h-8 flex justify-center items-center rounded-full ${globalStatsView === "json" ? "bg-muted" : ""}`}
 			>
 				<HugeiconsIcon
 					icon={CodeIcon}
-					class="w-5 h-5"
+					class="w-4 h-4"
 					strokeWidth={2}
 				/>
 			</button>
@@ -405,7 +438,7 @@
 						<tbody>
 							{#each Object.entries(globalStats ?? {}) as [key, value] (key)}
 								<tr class="border-b last:border-b-0">
-									<th class="w-1/2 bg-muted/40 px-4 text-xs py-2 font-normal text-left text-muted-foreground">
+									<th class="w-1/2 px-4 bg-muted/40 text-xs py-2 font-normal text-left text-muted-foreground">
 											{prettyKey(key)}
 									</th>
 									<td class="px-4 py-1 text-xs break-all">
@@ -417,8 +450,27 @@
 					</table>
 				</div>
 			{:else}
-					<pre class="min-h-fit overflow-auto rounded-xl border bg-muted p-4 text-xs leading-5">{JSON.stringify(globalStats ?? {}, null, 2)}</pre>
+				<div class="min-h-[200px] overflow-x-scroll overflow-y-scroll z-100 json-class overflow-auto rounded-xl border bg-muted/40 p-4 text-xs">
+					<JsonView
+						json={globalStats}
+					/>
+				</div>
 			{/if}
 	</Dialog.Content>
 </Dialog.Root>
 
+
+<style>
+  .json-class {
+    font-family: monospace;
+    font-size: 14px;
+    --jsonBorderLeft: 1px solid var(--color-muted-foreground);
+    --jsonValColor: var(--color-muted-foreground);
+		--jsonBracketColor: var(--bg-muted);
+		--jsonBracketHoverBackground: var(--color-muted);
+		--jsonValColor: var(--color-muted-foreground);
+		--jsonValBooleanColor: var(--color-muted-foreground);
+		--jsonValStringColor: var(--color-muted-foreground);
+		--jsonValNumberColor: var(--color-muted-foreground);
+  }
+</style>

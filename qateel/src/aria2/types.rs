@@ -5,6 +5,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::{atomic::{AtomicU64}, Arc };
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 
+/*
+	Those value are getting serialize are in `camelCase`
+
+*/
 /// For aria2 worker
 #[derive(Debug, Clone, Serialize)]
 pub struct Aria2JsonRpcReq {
@@ -68,7 +72,7 @@ pub struct PauseReq {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all="camelCase")]
 pub struct ResumeReq {
-    pub gid: Option<Vec<String>>,
+    pub gids: Option<Vec<String>>,
     pub resume_all: Option<bool>,
 }
 
@@ -76,7 +80,7 @@ pub struct ResumeReq {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all="camelCase")]
 pub struct StopReq {
-    pub gid: Option<Vec<String>>,
+    pub gids: Option<Vec<String>>,
     pub force_stop: Option<bool>,
 }
 
@@ -167,43 +171,47 @@ pub struct PaginationQuery {
 
 /// Search
 #[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "camelCase")]
 pub struct SearchQuery {
     #[serde(default, alias = "q", alias = "query", alias = "search", alias = "term")]
     pub q: Option<String>,
-
     #[serde(default, alias = "type", alias = "kind")]
     pub file_type: Option<String>,
-
     #[serde(default, alias = "ext", alias = "extension")]
     pub extension: Option<String>,
-
     #[serde(default)]
     pub page: Option<u32>,
-
     #[serde(default)]
     pub per_page: Option<u32>,
 }
 
-/// Duplicate
-#[derive(Deserialize, Debug, Clone, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum DuplicateAction {
-    Overwrite,
-    Copy,
-}
-
+/// Uri metadata
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UriMeta {
     pub name: String,
     pub resumable: bool,
 	pub total_length: String,
 }
 
+/// Accept URIs
 #[derive(Deserialize, Debug)]
 pub struct UriInfoReq {
     pub uris: Vec<String>,
 }
 
+/// Info of conflicted dl
+#[derive(Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateConflict {
+    pub gid: Option<String>,
+	pub status: Option<GidStatus>,
+    pub name: String,
+	pub message: String,
+	pub conflict_type: String,					/*	"hash", "uri", "file", or "untrackedFile", i'm tired of making enums*/
+}
+
+/// Uri info res
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct UriInfoRes {
@@ -215,12 +223,11 @@ pub struct UriInfoRes {
     pub is_ftp: bool,
     pub is_sftp: bool,
     pub is_duplicate: bool,
-    pub existing_gid: Option<String>,
-    pub conflict_type: Option<String>,				// "hash", "uri", or "file"
-	pub conflict_msg: Option<String>,
-	pub probe_error: Option<String>,				// "No internet connection" or "Slow connection"
+    pub conflict: Option<DuplicateConflict>,		// Reusing your existing struct
+	pub probe_error: Option<String>,				// "No internet connection" or any probing error!!
 }
 
+// Adding uri in queue
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct AddUriTask {
@@ -228,7 +235,6 @@ pub struct AddUriTask {
     pub name: String,
     pub total_length: String,
     pub is_resume_supported: bool,
-    pub duplicate_action: Option<DuplicateAction>,
     pub options: Option<serde_json::Map<String, Value>>,
 }
 
@@ -251,8 +257,8 @@ pub struct CheckNameRes {
     pub msg: Option<String>,
 }
 
-/// Move DL up and down in aria2 DL queue
-#[derive(Deserialize)]
+/// Move dl up and down in aria2 queue
+#[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct MoveReq {
     pub gid: String,
@@ -262,7 +268,15 @@ pub struct MoveReq {
     pub how: String,
 }
 
-/// Torrent metadata
+///
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangeUriReq {
+    pub gid: String,
+	pub uri: String,
+}
+
+/// Torrent and Magnet metadata
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TorrentMagnetMeta {
@@ -335,7 +349,7 @@ impl From<&str> for Kind {
 #[serde(rename_all = "camelCase")]
 pub struct ItemMetaData {
     pub gid: String,
-    /// Torrent or DDl actual name
+    /// DDl actual name
     pub name: Option<String>,
     /// what type of download
     pub kind: Kind,
@@ -356,7 +370,7 @@ pub struct ItemMetaData {
     pub source_uri: Option<String>,
     /// Hash of the only (magnets or torrent)
     pub info_hash: Option<String>,
-    /// Hash of the only (magnets or torrent)
+    /// If it was a seeder; so on restart start as seeder
     pub seeder: Option<bool>,
     /// Hash for anything
     pub content_hash: Option<String>,
@@ -400,17 +414,22 @@ pub struct TickTask {
     pub name: Option<String>,
     pub kind: Kind,
     pub status: GidStatus,
+	pub dir: Option<String>,
     pub source_uri: Option<String>,
-    pub dir: Option<String>,
-    pub connections: Option<String>,
-    pub num_seeders: Option<String>,
-    pub verify_integrity_pending: Option<bool>,
-    pub verified_length: Option<String>,
-    pub total_length: String,
+	pub is_resume_supported: Option<bool>,
+	/// JSON array string
+    pub files: Option<String>,
+	/// Values those need streaming updates
+	pub upload_length: String,
     pub completed_length: String,
-    pub upload_length: String,
+	pub total_length: String,
+	pub verified_length: Option<String>,
+	pub connections: Option<String>,
     pub download_speed: String,
     pub upload_speed: String,
+	pub num_seeders: Option<String>,
+	pub seeder: Option<bool>,
+	pub verify_integrity_pending: Option<bool>,
 }
 
 /// Ddl stats
@@ -458,7 +477,7 @@ pub enum GlobalStatWsMessage {
 
 /*
   * Aria2 rpc json response, mapping tellStatus
-  * for `uris`, `torrents`, `magnet initial and after (handling following and followed_by)`
+  * For `uris`, `torrents`, `magnets` initial and after (handling following and followed_by)
 */
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -536,5 +555,123 @@ pub struct Aria2Res {
     pub verified_length: Option<String>,
     /// Res is string: "true" | "false"
     pub verify_integrity_pending: Option<String>
+}
+
+/// Categorize items
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ItemCategory {
+    Everything,
+    Torrent,
+    Music,
+    Photos,
+    Programs,
+    Videos,
+    Subtitles,
+    Compressed,
+    Others,
+}
+
+#[derive(Serialize, Default, Clone)]
+pub struct StatusCounts {
+    pub all: usize,
+    pub active: usize,
+    pub paused: usize,
+    pub waiting: usize,
+    pub complete: usize,
+    pub removed: usize,
+    pub stopped: usize,
+    pub error: usize,
+    pub seeding: usize,
+}
+
+#[derive(Serialize, Default, Clone)]
+pub struct CategoryCounts {
+    pub everything: usize,
+    pub torrent: usize,
+    pub music: usize,
+    pub photos: usize,
+    pub programs: usize,
+    pub videos: usize,
+    pub subtitles: usize,
+    pub compressed: usize,
+    pub others: usize,
+}
+
+#[derive(Serialize, Default, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemCoundStatsRes {
+    pub by_status: StatusCounts,
+    pub by_category: CategoryCounts,
+}
+
+#[derive(sqlx::FromRow)]
+pub struct DownloadRowForItemCount {
+    pub name: Option<String>,
+    pub status: String,
+    pub kind: String,
+}
+
+/// Torrent or Magnet probing metadata
+#[derive(Debug, Deserialize)]
+pub struct TorrentMeta {
+    pub info: TorrentInfo,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TorrentFile {
+    pub length: u64,
+	pub path: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TorrentInfo {
+    pub name: Option<String>,
+    pub private: Option<u8>,
+    pub length: Option<u64>,
+    pub files: Option<Vec<TorrentFile>>,
+}
+
+impl TorrentInfo {
+    /// Returns total size in bytes
+	/// Single file or multi file torrents
+    pub fn total_size(&self) -> u64 {
+        if let Some(len) = self.length {
+            len
+        } else if let Some(files) = &self.files {
+            files.iter().map(|f| f.length).sum()
+        } else {
+            0
+        }
+    }
+
+    pub fn is_private(&self) -> bool {
+        self.private.unwrap_or(0) == 1
+    }
+}
+
+#[derive(Debug)]
+pub struct ParsedTorrent {
+    pub name: String,
+    pub total_size: u64,
+    pub is_private: bool,
+    pub info_hash: String,
+}
+
+#[derive(Deserialize)]
+pub struct TorsProbeReq {
+    pub torrents: Vec<String>,				// Array of Base64 encoded torrent strings
+}
+
+#[derive(Serialize, Debug)]
+pub struct TorsProbeRes {
+    pub index: usize,
+    pub name: Option<String>,
+    pub info_hash: Option<String>,
+    pub total_length: Option<String>,
+	pub is_duplicate: Option<bool>,
+	pub is_private: Option<bool>,
+    pub conflict: Option<DuplicateConflict>,
+    pub probe_error: Option<String>,				 // Any probe error
 }
 

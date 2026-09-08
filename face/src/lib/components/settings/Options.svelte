@@ -13,11 +13,7 @@
 	import OptionField from "$lib/components/settings/OptionsField.svelte";
 	import { gidOptionsSections } from "$lib/components/settings/options-schema";
 	import { SettingIcons } from "$lib/components/settings/global-options-schema";
-	import {
-		Search01Icon,
-		SidebarLeftIcon,
-		InformationCircleIcon
-	} from "@hugeicons/core-free-icons";
+	import { Search01Icon, SidebarLeftIcon, InformationCircleIcon } from "@hugeicons/core-free-icons";
 
 	let {
 		open = $bindable(false),
@@ -131,11 +127,11 @@
 
 		setTimeout(() => {
 			const el = document.getElementById(`field-${fieldKey}`);
-      if (el) {
-        el.scrollIntoView({ behavior: "smooth", inline: "center" });
-        el.classList.add("highlight-field");
-        setTimeout(() => el.classList.remove("highlight-field"), 5000);
-      }
+			if (el) {
+				el.scrollIntoView({ behavior: "smooth", inline: "center" });
+				el.classList.add("highlight-field");
+				setTimeout(() => el.classList.remove("highlight-field"), 5000);
+			}
 		}, 300);
 	};
 
@@ -208,7 +204,8 @@
 		}}
 	>
 		<div
-			class="sm:px-4 sm:py-3 md:flex md:items-center md:justify-between shrink-0 border-b border-sidebar-border"
+			class="sm:px-4 sm:py-3 md:flex md:items-center md:justify-between shrink-0
+				relative after:absolute after:bottom-0 after:left-0 after:h-[1px] after:w-full after:bg-gradient-to-r after:from-transparent after:via-sidebar-border after:to-transparent"
 		>
 			<div class="flex items-center justify-between px-0.5 gap-x-2 sm:gap-3 max-md:mb-4">
 				<button
@@ -221,8 +218,8 @@
 					<HugeiconsIcon icon={SidebarLeftIcon} class="size-5" />
 				</button>
 				<div class="mt-3 max-md:text-center">
-					<Dialog.Title class="sm:text-lg text-[18px] font-bold">Set download options</Dialog.Title>
-					<Dialog.Description class="text-xs truncate max-w-sm">
+					<Dialog.Title class="sm:text-lg text-[18px] font-semibold">Set options...</Dialog.Title>
+					<Dialog.Description class="text-sm truncate max-w-sm">
 						{filename ? `Editing: ${filename}` : "Set specific parameters for this download."}
 					</Dialog.Description>
 				</div>
@@ -313,11 +310,7 @@
 							class={`w-full cursor-pointer flex items-center gap-3 rounded-2xl px-3 py-2.5 text-left transition-colors
 								${activeSectionId === section.id ? "bg-primary/10 text-primary font-medium" : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"}`}
 						>
-							<img
-								src={resolveIcon(section.icon)}
-								alt="settings-icon"
-								class="size-4 shrink-0"
-							/>
+							<img src={resolveIcon(section.icon)} alt="settings-icon" class="size-4 shrink-0" />
 							<span class="text-sm truncate">{section.title}</span>
 						</button>
 					{/each}
@@ -333,7 +326,9 @@
 							out:fade={{ duration: 300 }}
 						>
 							<div>
-								<h2 class="md:text-2xl font-bold tracking-tight text-lg">{activeSection.title}</h2>
+								<h2 class="md:text-2xl font-semibold tracking-tight text-lg">
+									{activeSection.title}
+								</h2>
 								<p class="md:text-sm text-xs text-muted-foreground md:mt-1">
 									{activeSection.description}
 								</p>
@@ -341,10 +336,7 @@
 
 							<div class="grid gap-x-8 gap-y-4 md:grid-cols-2">
 								{#each activeSection.fields as field (field.key)}
-									<OptionField
-										schema={field}
-										bind:value={workingDraft[field.key]}
-									/>
+									<OptionField schema={field} bind:value={workingDraft[field.key]} />
 								{/each}
 							</div>
 						</div>
@@ -491,4 +483,3 @@
 		</div>
 	</Dialog.Content>
 </Dialog.Root>
-

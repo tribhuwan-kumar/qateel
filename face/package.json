@@ -61,6 +61,7 @@
 	"dependencies": {
 		"@tailwindcss/vite": "^4.1.18",
 		"@types/mime-types": "^3.0.1",
+		"@zerodevx/svelte-json-view": "^2.0.0",
 		"dayjs": "^1.11.19",
 		"eruda": "^3.4.3",
 		"svelte-virtual-table": "^2.0.3"

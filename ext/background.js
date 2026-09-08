@@ -51,7 +51,7 @@ browser.runtime.onMessage.addListener(async (message) => {
   }
 });
 
-// Helper function to send the data payload to your route
+// Helper function to send the data payload to route
 async function sendToQateel(downloadUrl) {
   const settings = await browser.storage.local.get({ qateelAddress: DEFAULT_API_URL });
 

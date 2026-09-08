@@ -1,5 +1,5 @@
 import { toast } from "svelte-sonner";
-import { SvelteSet, SvelteMap, SvelteDate } from "svelte/reactivity";
+import { writable } from 'svelte/store';
 import { secureFetch } from "$lib/utils";
 import { browser } from "$app/environment";
 import { truncateMiddle } from "$lib/utils";
@@ -17,6 +17,8 @@ import type {
   DdlWsMessage,
   Aria2Options,
   ItemMetaData,
+	SearchParams,
+	SearchResponse,
   ChangeOptionReq,
   HistoryResponse,
 	Aria2CmdOptions,
@@ -24,6 +26,13 @@ import type {
 	ChangeCmdOptionReq,
   ChangeGlobalOptionReq,
 } from "$lib/aria2/types";
+import {
+	SvelteURL,
+	SvelteSet,
+	SvelteMap,
+	SvelteDate,
+	SvelteURLSearchParams
+} from "svelte/reactivity";
 
 export const UNTITLED: string = "<Untitled>";
 
@@ -45,6 +54,10 @@ export const aria2Store = $state({
 export function setDefaultStat() {
   aria2Store.global = { ...defaultGlobalStat };
 }
+
+/// Proably a json
+export const aria2Info = writable<Record<string, any>>();
+export const itemCounts = writable<Record<string, any>>();
 
 export class Aria2Manager {
   private ddlWs: WebSocket | null = null;
@@ -180,7 +193,7 @@ export class Aria2Manager {
   private handleDdlEvent(newItem: ItemMetaData) {
     const index = aria2Store.items.findIndex(i => i.gid === newItem.gid);
     if (index !== -1) {
-      // Object.assign merges the new DB truth, but we preserve the volatile speeds!
+      // Object.assign merges the new DB truth, but preserve the volatile speeds!
       const currentDownloadSpeed = aria2Store.items[index].downloadSpeed;
       const currentUploadSpeed = aria2Store.items[index].uploadSpeed;
 
@@ -238,7 +251,7 @@ export class Aria2Manager {
 
   async loadInitialData(page = 1) {
     try {
-      const res = await secureFetch(`/api/aria2/user/history?page=${page}&limit=15`);
+      const res = await secureFetch(`/api/qateel/user/history?page=${page}&limit=15`);
       const json: HistoryResponse = await res.json();
 
       if (json.data) {
@@ -262,7 +275,7 @@ export class Aria2Manager {
 
   async delete(gids: string[], deleteFile: boolean) {
     try {
-      const res = await secureFetch("/api/aria2/gid/delete", {
+      const res = await secureFetch("/api/qateel/gid/delete", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -280,11 +293,11 @@ export class Aria2Manager {
 			if (data.status === "deleted") {
 				aria2Store.items = aria2Store.items.filter(i => !gids.includes(i.gid));
 				selectedGids.set([]);
-
 			}
-			console.log("data from deletion endpoint:", data)
-
-      toast.success(`${gids.length === 1 ? "Successfully deleted!!" : `Deleted ${gids.length} items`}`, {
+			console.log("Data from deletion endpoint:", data)
+			await this.getItemsCount();
+      toast.success(`${gids.length === 1 ?
+							"Successfully deleted!!" : `Deleted ${gids.length} items!!`}`, {
         richColors: true,
         style: "cursor: pointer;"
       });
@@ -307,7 +320,7 @@ export class Aria2Manager {
   // async retry(gid: string): Promise<RetryResult> {
   //   const payload: RetryReq = { gid, action };
   //   try {
-  //     const res = await secureFetch("/api/aria2/gid/retry", {
+  //     const res = await secureFetch("/api/qateel/gid/retry", {
   //       method: "POST",
   //       headers: { "Content-Type": "application/json" },
   //       body: JSON.stringify(payload)
@@ -345,23 +358,23 @@ export class Aria2Manager {
 	async addUris(payload: AddUriReq): Promise<any> {
     if (!payload || payload.tasks.length === 0) return null;
     try {
-      const res = await secureFetch(`/api/aria2/add/uris`, {
+      const res = await secureFetch(`/api/qateel/add/uris`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
 
-      const data = await res.json().catch(() => null);
+      const resAsJson = await res.json().catch(() => null);
 
       if (!res.ok) {
-        const message = data?.error
-					|| data?.message
+        const message = resAsJson?.error
+					|| resAsJson?.message
 					|| `Failed to add ${payload.tasks.length === 1 ? "URI" : `${payload.tasks.length} URIs`}`;
         toast.error(message, { richColors: true, style: "cursor: pointer;" });
         throw new Error(message);
       }
 
-      if (!data || !Array.isArray(data.results)) {
+      if (!resAsJson || !Array.isArray(resAsJson.data)) {
         const message = "Server returned an invalid response while adding URIs";
         toast.error(message, {
 					richColors: true,
@@ -370,7 +383,7 @@ export class Aria2Manager {
         throw new Error(message);
       }
 
-      data.results.forEach((result: any, fallbackIndex: number) => {
+      resAsJson.data.forEach((result: any, fallbackIndex: number) => {
         const index = typeof result.index === "number" ? result.index : fallbackIndex;
         const task = payload.tasks[index];
         const uri = task?.name ?? `URI: ${index + 1}`;
@@ -378,7 +391,7 @@ export class Aria2Manager {
         if (result?.error) {
           const message: string = result?.error || "Something went wrong";
           toast.error(`Failed to add URI  :(`, {
-            description: `${message.replace(/\.$/, "")}`,
+            description: `${message.replace(/\.$/, "").replace(/--/g, "")}`,
             richColors: true,
             style: "cursor: pointer;"
           });
@@ -388,10 +401,11 @@ export class Aria2Manager {
             richColors: true,
             style: "cursor: pointer;"
           });
+					this.getItemsCount();
         }
       });
 
-      return data.results;
+      return resAsJson.data;
     } catch (e) {
       console.error("Error adding URIs:", e);
       throw e;
@@ -406,19 +420,30 @@ export class Aria2Manager {
     if (!uris || uris.length === 0) return [];
     try {
       const payload: UriInfoReq = { uris };
-      const res = await secureFetch(`/api/aria2/add/probe/uris`, {
+      const res = await secureFetch(`/api/qateel/probe/uris`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
       if (!res.ok) {
         console.error("Failed to probe URIs:", await res.text());
+				toast.error("Failed to probe URIs:", {
+					description: await res.text(),
+					richColors: true,
+					style: "cursor: pointer;"
+				});
         return null;
       }
       const json = await res.json();
       return json.data as UriInfoRes[];
     } catch (e) {
       console.error("Network error while probing URIs:", e);
+      const message = this.extractErrorMessage(e);
+      toast.error("Failed to probe URIs:", {
+        description: message,
+        richColors: true,
+        style: "cursor: pointer;"
+      });
       return null;
     }
   }
@@ -432,7 +457,7 @@ export class Aria2Manager {
 	}> {
     if (!name || name.trim() === "") return { isConflict: false };
     try {
-      const res = await secureFetch(`/api/aria2/file/conflict`, {
+      const res = await secureFetch(`/api/qateel/file/conflict`, {
         method: "POST",
         headers: {
 					"Content-Type": "application/json"
@@ -453,7 +478,7 @@ export class Aria2Manager {
    * Multicall
   */
   async addTorrents(torrents: { torrent: string, options?: any }[]) {
-    const res = await secureFetch("/api/aria2/add/torrents", {
+    const res = await secureFetch("/api/qateel/add/torrents", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ torrents })
@@ -469,7 +494,7 @@ export class Aria2Manager {
       richColors: true,
       style: "cursor: pointer;"
     });
-
+		await this.getItemsCount();
     return await res.json();
   }
 
@@ -506,7 +531,7 @@ export class Aria2Manager {
    */
 	private async sendPauseRequest(payload: PauseReq) {
     try {
-      const res = await secureFetch("/api/aria2/gid/pause", {
+      const res = await secureFetch("/api/qateel/gid/pause", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -570,7 +595,7 @@ export class Aria2Manager {
   */
 	private async sendResumeRequest(payload: ResumeReq) {
     try {
-      const res = await secureFetch("/api/aria2/gid/resume", {
+      const res = await secureFetch("/api/qateel/gid/resume", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -611,7 +636,7 @@ export class Aria2Manager {
    */
 	async stop(gids: string[], force = false) {
     const payload: StopReq = {
-      gid: gids,
+      gids: gids,
       forceStop: force
     };
     await this.sendStopRequest(payload);
@@ -631,19 +656,24 @@ export class Aria2Manager {
    */
   private async sendStopRequest(payload: StopReq) {
     try {
-      const res = await secureFetch("/api/aria2/gid/stop", {
+      const res = await secureFetch("/api/qateel/gid/stop", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
 
+      const resAsJson = await res.json().catch(() => null);
+
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Stopping failed, please try again later...");
+        const message = resAsJson?.error
+					|| resAsJson?.message
+					|| `Failed to add ${payload.gids?.length === 1 ? "URI" : `${payload.gids?.length} URIs`}`;
+        toast.error(message, { richColors: true, style: "cursor: pointer;" });
+        throw new Error(resAsJson);
       }
 
       const isForce = payload.forceStop;
-      const count = payload.gid?.length || 0;
+      const count = payload.gids?.length || 0;
       const action = isForce ? "Forcefully stopped" : "Stopped";
       const itemLabel = count > 1 ? `${count} downloads` : "download";
 
@@ -652,11 +682,21 @@ export class Aria2Manager {
         style: "cursor: pointer;"
       });
 
-    } catch (e) {
-      console.error(e);
-      const message = this.extractErrorMessage(e);
-      toast.error("Failed to Stop:", {
-        description: message,
+    } catch (e: any) {
+			console.log("Stop error:", e);
+			let errorData: any;
+			try {
+				errorData = JSON.parse(e) || "{}";
+				console.log("errorData:", errorData);
+			} catch {
+				errorData = null;
+			}
+			const failedGids = errorData?.failed
+				? errorData.failed.map((item: any) => item.gid).join(", ")
+				: "Unknown error";
+
+      toast.error(`${failedGids}:`, {
+				description: failedGids,
         richColors: true,
         style: "cursor: pointer;"
       });
@@ -669,7 +709,7 @@ export class Aria2Manager {
    */
   async getOption(gid: string): Promise<Aria2Options> {
     try {
-      const res = await secureFetch("/api/aria2/gid/get/options", {
+      const res = await secureFetch("/api/qateel/gid/get/options", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ gid })
@@ -701,7 +741,7 @@ export class Aria2Manager {
     const payload: ChangeOptionReq = { gid, options };
 
     try {
-      const res = await secureFetch("/api/aria2/gid/set/options", {
+      const res = await secureFetch("/api/qateel/gid/set/options", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -733,7 +773,7 @@ export class Aria2Manager {
    */
   async getGlobalOption(): Promise<Aria2GlobalOptions> {
     try {
-      const res = await secureFetch("/api/aria2/global/get/options");
+      const res = await secureFetch("/api/qateel/global/get/options");
       const data = await res.json();
       if (!res.ok) {
         const err = data;
@@ -752,17 +792,17 @@ export class Aria2Manager {
   }
 
   /**
-   * Fetches the current global configuration from Aria2.
+   * Fetches the current Aria2 info
    */
   async getAria2Info(): Promise<any> {
     try {
-      const res = await secureFetch("/api/aria2/info");
-      const data = await res.json();
+      const res = await secureFetch("/api/qateel/info");
+      const results = await res.json();
       if (!res.ok) {
-        const err = data;
+        const err = results;
         throw new Error(err.error || "Failed to fetch aria2 info!!");
       }
-      return  data.data
+      return results.data
     } catch (e: any) {
       console.error(e);
       const message = this.extractErrorMessage(e)
@@ -775,6 +815,29 @@ export class Aria2Manager {
   }
 
   /**
+   * Fetches the items counts based on category
+   */
+	// don't wanna map all the static type, keeping it `any`
+  async getItemsCount(): Promise<void> {
+    try {
+      const res = await secureFetch("/api/qateel/user/items/count");
+      const results = await res.json();
+      if (!res.ok) {
+        const err = results;
+        throw new Error(err.error || "Failed to fetch item counts.");
+      }
+			itemCounts.set(results.data);
+    } catch (e: any) {
+      console.error(e);
+      const message = this.extractErrorMessage(e)
+      toast.error(`${message ? message : "Failed to fetch item counts."}`, {
+        closeButton: true,
+        richColors: true,
+      });
+    }
+  }
+
+  /**
    * Dynamically changes global options.
    * These settings will act as defaults for all newly added downloads.
    * Limits apply instantly to all active downloads.
@@ -783,7 +846,7 @@ export class Aria2Manager {
     const payload: ChangeGlobalOptionReq = { options };
 
     try {
-      const res = await secureFetch("/api/aria2/global/set/options", {
+      const res = await secureFetch("/api/qateel/global/set/options", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -814,7 +877,7 @@ export class Aria2Manager {
     const payload: ChangeCmdOptionReq = { options };
 
     try {
-      const res = await secureFetch("/api/aria2/cmd/set/options", {
+      const res = await secureFetch("/api/qateel/cmd/set/options", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -826,8 +889,8 @@ export class Aria2Manager {
         throw new Error(err.error || "Failed to set cmd options");
       }
 
-      toast.success("Aria2 commands setting updated", {
-				description: "Daemon will restart now!!",
+      toast.success("Global options updated!!", {
+				description: "Daemon will restart now.",
         richColors: true,
 				style: "cursor: pointer;"
       });
@@ -841,6 +904,78 @@ export class Aria2Manager {
       });
     }
   }
+
+	/**
+		* Perform search using server endpoint.
+		* Returns paginated and ranked results from the server.
+		*/
+	async search(params: SearchParams): Promise<SearchResponse> {
+		try {
+			const url = new SvelteURL("/api/qateel/search", window.location.origin);
+			const sp = new SvelteURLSearchParams();
+
+			// All in camelcase
+			if (params.q) sp.set("q", params.q);
+			if (params.fileType) sp.set("fileType", params.fileType);
+			if (params.extension) sp.set("extension", params.extension);
+			if (params.page) sp.set("page", String(params.page));
+			if (params.perPage) sp.set("perPage", String(params.perPage));
+			url.search = sp.toString();
+
+			const res = await secureFetch(url.pathname + (url.search ? `?${url.searchParams.toString()}` : ""));
+			if (!res.ok) {
+				const err = await res.json().catch(() => null);
+				throw new Error(err?.error || "Search request failed");
+			}
+			const json = await res.json();
+			console.log("Search res:", json);
+
+			return {
+				data: json.data ?? [],
+				meta: {
+					page: json.page ?? 1,
+					perPage: json.perPage ?? 20,
+					total: json.total ?? 0,
+				}
+			};
+		} catch (e) {
+			console.error("Search failed:", e);
+      const message = this.extractErrorMessage(e)
+      toast.error(`${message ? message : "Failed to search!!"}`, {
+        closeButton: true,
+        richColors: true,
+      });
+		}
+	}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
   private extractErrorMessage = (value: unknown): string => {
     if (value instanceof Error) {
@@ -867,7 +1002,7 @@ export class Aria2Manager {
 
       return value;
     }
-    return "Failed to update global settings";
+    return "Failed to extract error message";
   };
 }
 

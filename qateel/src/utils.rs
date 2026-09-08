@@ -1,5 +1,6 @@
 use rand::Rng;
 use std::path::PathBuf;
+use tracing::{info, error};
 use std::process::{Command, exit};
 
 /// Print intro
@@ -60,21 +61,47 @@ pub fn ensure_aria2_installation() {
 
     match result {
         Ok(output) if output.status.success() => {
-			tracing::info!("Aria2 is installed!!")
+			info!("Aria2 is installed!!")
 		}
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if stderr.trim().is_empty() {
-                tracing::error!("Aria2 is installed but failed to run");
+                error!("Aria2 is installed but failed to run");
             } else {
-                tracing::error!("Aria2 is installed but failed to run: {}", stderr.trim());
+                error!("Aria2 is installed but failed to run: {}", stderr.trim());
             }
             exit(1);
         }
         _ => {
-            tracing::error!("Aria2 is not installed or not available in $PATH. Please install it before running Qateel!!");
+            error!("Aria2 is not installed or not available in $PATH. Please install it before running Qateel!!");
             exit(1);
         }
+    }
+}
+
+/// Graceful stuff
+pub async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+
+        let mut sigterm = signal(SignalKind::terminate())
+            .expect("Failed to install SIGTERM handler");
+
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                info!("Ctrl+C received");
+            }
+            _ = sigterm.recv() => {
+                info!("SIGTERM received");
+            }
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+        info!("Ctrl+C received");
     }
 }
 

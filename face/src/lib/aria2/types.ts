@@ -16,7 +16,37 @@ export type GidStatus =
   "waiting" |
   "removed" |
   "stopped" |
+	"seeding" |
   "complete";
+
+export interface StatusCounts {
+    all: number;
+    active: number;
+    paused: number;
+    waiting: number;
+    complete: number;
+    removed: number;
+    stopped: number;
+    error: number;
+    seeding: number;
+}
+
+export interface CategoryCounts {
+    everything: number;
+    torrent: number;
+    music: number;
+    photos: number;
+    programs: number;
+    videos: number;
+    subtitles: number;
+    compressed: number;
+    others: number;
+}
+
+export interface ItemCoundStatsRes {
+    by_status: StatusCounts;
+    by_category: CategoryCounts;
+}
 
 export interface TorrentMagnetMeta {
   announceList: string[][],
@@ -120,8 +150,25 @@ export interface ResumeReq {
 }
 
 export interface StopReq {
-  gid?: string[];
+  gids?: string[];
   forceStop?: boolean;
+}
+
+export interface SearchParams {
+  q?: string | null;
+  fileType?: string | null;
+  extension?: string | null;
+  page?: number;
+  perPage?: number;
+}
+
+export interface SearchResponse {
+  data: ItemMetaData[];
+  meta: {
+    page: number;
+    perPage: number;
+    total: number;
+  };
 }
 
 /** BOOM everthing is string */
@@ -209,10 +256,6 @@ export type DdlWsMessage =
 export type GlobalStatWsMessage =
   | { type: "global"; data: GlobalStat };
 
-
-/// Copy add a numbderd name file
-export type DuplicateAction = "overwrite" | "copy";
-
 export interface AddUriReq {
   tasks: AddUriTask[];
 }
@@ -222,12 +265,19 @@ export interface AddUriTask {
   name: string;
   totalLength: string;
   isResumeSupported: boolean;
-  duplicateAction?: DuplicateAction;
   options?: Partial<Aria2Options>;
 }
 
 export interface UriInfoReq {
   uris: string[];
+}
+
+export interface DuplicateConflict {
+	name: string,
+	gid: string | null,
+	message: string | null,
+	status: GidStatus | null,
+	conflictType: "hash" | "uri" | "file" | "untrackedFile" | null;
 }
 
 export interface UriInfoRes {
@@ -239,10 +289,8 @@ export interface UriInfoRes {
   isFtp: boolean;
   isSftp: boolean;
   isDuplicate: boolean;
-  existingGid: string | null;
-  conflictType: string | null; // "hash", "uri", or "file"
-  conflictMsg: string | null;
-  probeError: string | null;
+  conflict: DuplicateConflict | null,
+  probeError: string | null;											// Any error
 }
 
 /** Aria2 passes string bool */

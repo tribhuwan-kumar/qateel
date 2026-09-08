@@ -23,7 +23,6 @@ export default defineConfig(({ command, mode }) => {
             changeOrigin: true
           }
         },
-				allowedHosts: ["25bc-42-108-176-20.ngrok-free.app"],
       }),
     },
     test: {

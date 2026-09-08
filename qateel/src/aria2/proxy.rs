@@ -5,11 +5,13 @@ use axum::{
     response::{IntoResponse},
 };
 use std::path::Path;
+use sha1::{Digest, Sha1};
 use tokio::process::Command;
-use futures::future::join_all;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use sqlx::{Sqlite, QueryBuilder};
+use tokio::time::{sleep, Duration};
+use futures::stream::{self, StreamExt};
 use super::types::{
     Kind,
 	Order,
@@ -26,32 +28,42 @@ use super::types::{
 	UriInfoReq,
 	UriInfoRes,
 	SearchQuery,
+	TorrentMeta,
+	CheckNameRes,
     ItemMetaData,
+	ChangeUriReq,
     Aria2Options,
     RemoveHisReq,
     SetOptionReq,
 	CheckNameReq,
-	CheckNameRes,
+	ItemCategory,
+	ParsedTorrent,
+	TorsProbeReq,
+	TorsProbeRes,
     PaginationQuery,
-	DuplicateAction,
     SetCmdOptionsReq,
+	DuplicateConflict,
+	ItemCoundStatsRes,
     TorrentMagnetMeta,
     BatchAddTorrentReq,
     SetGlobalOptionReq,
+	DownloadRowForItemCount,
 };
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use tracing::{info, debug, error, warn};
+use file_format::{FileFormat, Kind as FileKind};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use crate::{
     utils,
-    his::header,
+    his::probe,
     app::AppState,
-    his::header::UNTITLED,
+    his::probe::UNTITLED,
 	his::extract::Extraction,
     his::service::HistoryService,
     auth::types::User as AuthenticatedUser,
 };
 
+/* All return json is in `camelCase`  */
 
 /// Add all most all types of URIs
 pub async fn add_uris(
@@ -81,33 +93,16 @@ pub async fn add_uris(
 		if kind == Kind::Unknown {
 			results.push(serde_json::json!({
 				"index": i,
-				"code": "INVALID_URI",
-				"error": "Unsupported or invalid URL format"
+				"error": "Unsupported or invalid URL format."
 			}));
 			continue;
 		}
-
-        // Apply aria2 deduplication options
-        match task.duplicate_action {
-            None => {
-                opt.entry("auto-file-renaming".to_string()).or_insert(serde_json::json!("false"));
-                opt.entry("allow-overwrite".to_string()).or_insert(serde_json::json!("false"));
-            }
-            Some(DuplicateAction::Copy) => {
-                opt.insert("auto-file-renaming".to_string(), serde_json::json!("true"));
-                opt.insert("allow-overwrite".to_string(), serde_json::json!("false"));
-            }
-            Some(DuplicateAction::Overwrite) => {
-                opt.insert("auto-file-renaming".to_string(), serde_json::json!("false"));
-                opt.insert("allow-overwrite".to_string(), serde_json::json!("true"));
-            }
-        }
 
         let gid = utils::generate_gid();
         opt.insert("gid".to_string(), serde_json::json!(gid));
 
         // Inject the pre-probed file name so aria2 uses it
-        if !is_magnet {
+        if !is_magnet && !task.name.is_empty() {
             opt.insert("out".to_string(), serde_json::json!(task.name.clone()));
         }
 
@@ -130,17 +125,43 @@ pub async fn add_uris(
             error!("Failed to register record for GID {:?}: {:?}", gid, e);
         }
 
-        call_indices.push(i);
-        generated_gids.push(gid.clone());
+        if is_magnet {
+            let hash_str = info_hash.clone().unwrap();
+			let file_name = format!("{}-{}.torrent", user.user_id, hash_str);
+			let torrent_dir = state.config.data_dir.join("torrents");
+			let torrent_path = torrent_dir.join(&file_name);
+            // Directly inject the .torrent file downloaded during `probe_uris_info`
+            if torrent_path.exists() {
+                if let Ok(file_contents) = tokio::fs::read(&torrent_path).await {
+                    let b64 = STANDARD.encode(&file_contents);
+                    calls.push(json!({
+                        "methodName": "aria2.addTorrent",
+                        "params": [
+							b64,
+							[],				                /* Webseeding URIs, keeping it empty till now */
+							opt
+						]
+                    }));
+
+                    call_indices.push(i);
+                    generated_gids.push(gid.clone());
+
+                    continue;
+                }
+            }
+        }
 
         calls.push(serde_json::json!({
             "methodName": "aria2.addUri",
             "params": [ [task.uri], opt ]
         }));
+
+        call_indices.push(i);
+        generated_gids.push(gid.clone());
     }
 
     if calls.is_empty() {
-        return (reqwest::StatusCode::OK, Json(serde_json::json!({ "results": results })));
+        return (StatusCode::OK, Json(serde_json::json!({ "data": results })));
     }
 
     // Execute multicall
@@ -152,7 +173,6 @@ pub async fn add_uris(
                     let expected_gid = &generated_gids[arr_idx];
 
                     if let Some(returned_gid) = res.as_array().and_then(|g| g.first()).and_then(|v| v.as_str()) {
-
                         let state_clone = state.clone();
                         let gid_clone = returned_gid.to_string();
 
@@ -170,7 +190,6 @@ pub async fn add_uris(
 									gid_clone
                                 ).execute(&state_clone.db).await;
                             }
-
                             HistoryService::refresh_gid(&state_clone, gid_clone).await;
                         });
 
@@ -198,94 +217,163 @@ pub async fn add_uris(
                     }
                 }
             }
+
             results.sort_by_key(|v| v.get("index").and_then(|i| i.as_u64()).unwrap_or(0));
-            (reqwest::StatusCode::OK, Json(serde_json::json!({ "results": results })))
+            (StatusCode::OK, Json(serde_json::json!({ "data": results })))
         },
         Err(e) => {
             for gid in generated_gids {
                 let _ = sqlx::query!("DELETE FROM download_history WHERE gid = ?", gid).execute(&state.db).await;
             }
-            (reqwest::StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": e.to_string() })))
+            (StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": e.to_string() })))
         }
     }
 }
 
-/// Get preflight info for all types of uris
+
+/// Get preflight info for almost all types of uris
 pub async fn probe_uris_info(
     State(state): State<AppState>,
+    user: AuthenticatedUser,
     Json(payload): Json<UriInfoReq>,
 ) -> impl IntoResponse {
-    let mut tasks = Vec::new();
-    let mut results = Vec::new();
+    if payload.uris.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "No URIs provided." })));
+    }
 
-    for uri in payload.uris {
+    let total_count = payload.uris.len();
+    let user_id = user.user_id.clone();
+
+    let mut magnet_indices = Vec::new();
+    let mut magnet_probe_items = Vec::new();
+
+    let mut http_indices = Vec::new();
+    let mut http_uris = Vec::new();
+
+    // Pre allocate slot array for indexed results
+    let mut intermediate_results: Vec<Option<(
+		String,						// uri
+		UriMeta,					// meta
+		Option<String>,				// probe error
+		Option<String>,				// info_hash,
+		bool,						// is_magnet,
+		bool,						// is_ftp,
+		bool						// is_sftp, no creating struct this time
+	)>> = vec![None; total_count];
+
+    // Categorize URIs
+    for (idx, uri) in payload.uris.iter().enumerate() {
         let uri_lower = uri.to_ascii_lowercase();
         let is_magnet = uri_lower.starts_with("magnet:");
         let is_ftp = uri_lower.starts_with("ftp://");
         let is_sftp = uri_lower.starts_with("sftp://");
         let is_http = uri_lower.starts_with("http://") || uri_lower.starts_with("https://");
 
-
-        if !is_magnet && !is_ftp && !is_sftp && !is_http {
-            results.push(UriInfoRes {
+        if is_magnet {
+            let info_hash = Extraction::extract_mgn_info_hash(uri);
+            magnet_indices.push(idx);
+            magnet_probe_items.push(probe::MagnetProbeItem {
                 uri: uri.clone(),
+                info_hash,
+            });
+        } else if is_http {
+            http_indices.push(idx);
+            http_uris.push(uri.clone());
+        } else if is_ftp || is_sftp {
+            let name = Extraction::extract_url_filename(uri).unwrap_or_else(|| uri.clone());
+            let meta = UriMeta {
+                name,
+                total_length: "0".to_string(),
+                resumable: true,
+            };
+            let err = Some("Authentication required, set credentials in options.".to_string());
+            intermediate_results[idx] = Some((uri.clone(), meta, err, None, false, is_ftp, is_sftp));
+        } else {
+            let meta = UriMeta {
                 name: uri.clone(),
                 total_length: "0".to_string(),
-                is_resume_supported: false,
-                is_magnet: false,
-                is_ftp: false,
-                is_sftp: false,
-                is_duplicate: false,
-                existing_gid: None,
-                conflict_type: None,
-                conflict_msg: None,
-                probe_error: Some("Unsupported or invalid URL format".to_string()),
-            });
-            continue; // Skip spawning a thread pool task for this item
-        }
-
-        let state_clone = state.clone();
-
-        // Spawn each probe onto the tokio thread pool concurrently
-        tasks.push(tokio::spawn(async move {
-            let info_hash = Extraction::extract_mgn_info_hash(&uri);
-
-            let mut meta = UriMeta {
-                name: String::new(),
-                total_length: "0".to_string(),
-                resumable: false
+                resumable: false,
             };
-            let mut probe_error = None;
+            let err = Some("Unsupported or invalid URL format".to_string());
+            intermediate_results[idx] = Some((uri.clone(), meta, err, None, false, false, false));
+        }
+    }
 
-            // Skip probing entirely for magnet links
-            if is_magnet {
-                meta.name = Extraction::extract_mgn_name(&uri).unwrap_or_else(|| uri.clone());
-                meta.resumable = true;
-            } else if is_ftp || is_sftp {
-                meta.name = Extraction::extract_url_filename(&uri).unwrap_or_else(|| uri.clone());
-                meta.resumable = true;
-            }
-            else {
-                // Only use the HTTP Prober for http/https links
-                match header::uri_metadata(&uri).await {
-                    Ok(fetched_meta) => meta = fetched_meta,
-                    Err((err_msg, fallback_meta)) => {
-                        probe_error = Some(err_msg);
-                        meta = fallback_meta;
-                    }
-                }
-            }
+    // Execute magnet and HTTP probes concurrently with bounded streams
+    let (magnet_results, http_results) = tokio::join!(
+        probe::probe_magnets(&state, &user_id, magnet_probe_items),
+        probe::probe_http_uris(http_uris)
+    );
 
-            // Check database, disk for duplicates
-            let duplicate_check = find_duplicate(
-                &state_clone,
-                &uri,
-                &meta.name,
-                &meta.total_length,
-                info_hash.as_deref()
-            ).await;
+    // Merge magnet results into slots
+    for (m_idx, res) in magnet_indices.into_iter().zip(magnet_results) {
+        let uri = &payload.uris[m_idx];
+        let info_hash = Extraction::extract_mgn_info_hash(uri);
+        match res {
+            Ok(meta) => {
+				intermediate_results[m_idx] = Some((uri.clone(), meta, None, info_hash, true, false, false))
+			},
+            Err((err, meta)) => {
+				intermediate_results[m_idx] = Some((uri.clone(), meta, Some(err), info_hash, true, false, false))
+			}
+        }
+    }
 
-            UriInfoRes {
+    // Merge http results into slots
+    for (h_idx, res) in http_indices.into_iter().zip(http_results) {
+        let uri = &payload.uris[h_idx];
+        match res {
+            Ok(meta) => intermediate_results[h_idx] = {
+				Some((uri.clone(), meta, None, None, false, false, false))
+			},
+            Err((err, meta)) => intermediate_results[h_idx] = {
+				Some((uri.clone(), meta, Some(err), None, false, false, false))
+			},
+        }
+    }
+
+    // Bounded duplicate checking against db
+    let mut duplicate_checks = vec![None; total_count];
+	const MAX_CONCURRENT_DB_CHECKS: usize = 16;
+
+    let db_stream = stream::iter(intermediate_results.clone().into_iter().enumerate().map(|(idx, item_opt)| {
+        let state_ref = state.clone();
+        async move {
+            let res = if let Some((uri, meta, _, info_hash, _, _, _)) = item_opt {
+                find_duplicate(
+                    &state_ref,
+                    uri.as_str(),
+                    &meta.name,
+                    &meta.total_length,
+                    info_hash.as_deref(),
+                )
+                .await
+            } else {
+                None
+            };
+            (idx, res)
+        }
+    }))
+    .buffer_unordered(MAX_CONCURRENT_DB_CHECKS);
+
+    tokio::pin!(db_stream);
+
+    while let Some((idx, dup_res)) = db_stream.next().await {
+        duplicate_checks[idx] = dup_res;
+    }
+
+    // Construct final response array maintaining original order
+    let mut final_results: Vec<UriInfoRes> = Vec::with_capacity(total_count);
+
+    for (item_opt, duplicate_check) in intermediate_results.into_iter().zip(duplicate_checks) {
+        if let Some((uri, meta, probe_error, _info_hash, is_magnet, is_ftp, is_sftp)) = item_opt {
+			let conflict_type = if let Some(conflict) = duplicate_check.as_ref() {
+				Some(conflict.conflict_type.clone())
+			} else {
+				None
+			};
+
+            final_results.push(UriInfoRes {
                 uri,
                 name: meta.name,
                 total_length: meta.total_length,
@@ -293,58 +381,60 @@ pub async fn probe_uris_info(
                 is_magnet,
                 is_ftp,
                 is_sftp,
-                is_duplicate: duplicate_check.is_some(),
-                existing_gid: duplicate_check.as_ref().and_then(|d| d.0.clone()),
-                conflict_type: duplicate_check.as_ref().map(|d| d.2.clone()),
-                conflict_msg: duplicate_check.as_ref().map(|d| d.3.clone()),
-                probe_error: probe_error,
-            }
-        }));
-    }
-
-    // Wait for all http probes and db queries to finish all execution
-    let resolved_tasks = join_all(tasks).await;
-
-    for res in resolved_tasks {
-        if let Ok(preflight_data) = res {
-            results.push(preflight_data);
+                is_duplicate: conflict_type.is_some(),
+				conflict: duplicate_check,
+                probe_error,
+            });
         }
     }
 
-    let is_completely_offline = results.iter().any(|r| {
-        r.probe_error.as_deref() == Some("No internet connection")
-    });
+    // Offline check fallback
+    let is_completely_offline = final_results
+        .iter()
+        .any(|r| r.probe_error.as_deref() == Some("No internet connection."));
 
     if is_completely_offline {
-        for item in &mut results {
+        for item in &mut final_results {
             if item.is_magnet || item.is_ftp || item.is_sftp {
-                item.probe_error = Some("No internet connection".to_string());
+                item.probe_error = Some("No internet connection.".to_string());
             }
         }
     }
 
-    (StatusCode::OK, Json(serde_json::json!({ "data": results })))
+    (StatusCode::OK, Json(json!({ "data": final_results })))
 }
 
+
+/// Get duplication details
 async fn find_duplicate(
     state: &AppState,
     uri: &str,
     name: &str,
     _total_length: &str,
     info_hash: Option<&str>
-) -> Option<(Option<String>, String, String, String)> {     // (Option<Gid>, Name, Conflict type, Conflict message)
+) -> Option<DuplicateConflict> {
 
-    // Check database first
     let records = sqlx::query!(
         r#"
-            SELECT gid, name, files, dir, info_hash, source_uri
+            SELECT
+				gid,
+				dir,
+				name,
+				files,
+				info_hash,
+				source_uri,
+				status as "status: GidStatus"
             FROM download_history
             WHERE (info_hash = $1 AND $1 IS NOT NULL)
                OR (source_uri = $2 AND $2 IS NOT NULL)
                OR (name = $3 AND $3 IS NOT NULL AND $3 != '' AND $3 != $4)
         "#,
-        info_hash, uri, name, UNTITLED
-    ).fetch_all(&state.db).await.unwrap_or_default();
+        info_hash,
+        uri,
+        name,
+		UNTITLED
+    ).fetch_all(&state.db)
+	.await.unwrap_or_default();
 
     for rec in records {
         let mut files_exist = false;
@@ -361,53 +451,85 @@ async fn find_duplicate(
             }
         }
 
-        let conflict_type = if info_hash.is_some() && rec.info_hash.as_deref() == info_hash {
-            "hash".to_string()
-        } else if rec.source_uri.as_deref() == Some(uri) {
-            "uri".to_string()
-        } else {
-            "file".to_string()
-        };
+		let is_uri_conflict = rec.source_uri.as_deref() == Some(uri);
+        let is_hash_conflict = info_hash.is_some() && rec.info_hash.as_deref() == info_hash;
+        let record_name = rec.name.unwrap_or_else(|| UNTITLED.into());
 
-        let conflict_msg = if info_hash.is_some() && rec.info_hash.as_deref() == info_hash {
-            "Torrent/magnet link already exists.".to_string()
-        } else if rec.source_uri.as_deref() == Some(uri) {
-            "Downloaded content from this URI already exists.".to_string()
-        } else {
-            "File already exists in the download dir.".to_string()
-        };
+        if is_hash_conflict {
+			let message = match (files_exist, &rec.status) {
+				(true, GidStatus::Complete) => "Downloaded content from this BitTorrent info hash already exists.",
+				(_, GidStatus::Complete) | (_, GidStatus::Removed) => {
+					"Same BitTorrent info hash already exists in database but the downloaded content doesn't exist."
+				},
+				(_, GidStatus::Active) => "An active BitTorrent is already being downloaded from this info hash.",
+				(_, GidStatus::Paused) => "There is a paused BitTorrent download from this info hash.",
+				(_, GidStatus::Waiting) => "There is a waiting BitTorrent download from this info hash.",
+				(_, GidStatus::Seeding) => "There is a BitTorrent already being seeded from this info hash.",
+				(_, GidStatus::Stopped) => "There is a stopped BitTorrent download from this info hash.",
+				(_, GidStatus::Error) => "There is an error BitTorrent download from this info hash.",
+			}.to_string();
 
-        // Torrents always trigger.
-        // URIs only trigger if the file is physically on disk.
-        if info_hash.is_some() || files_exist {
-            return Some((
-                Some(rec.gid),
-                rec.name.unwrap_or_else(|| "<Unknown>".to_string()),
-                conflict_type,
-                conflict_msg,
-            ));
+			return Some(DuplicateConflict {
+				message,
+                name: record_name,
+				status: Some(rec.status),
+				gid: Some(rec.gid),
+                conflict_type: "hash".to_string(),
+            });
+
+        } else if is_uri_conflict {
+			let message = match (files_exist, &rec.status) {
+				(true, GidStatus::Complete) => "Downloaded content from this URI already exists.",
+				(_, GidStatus::Complete) | (_, GidStatus::Removed) => {
+					"Same URI exists in database but the downloaded content doesn't exist."
+				},
+				(_, GidStatus::Active) => "An active download is already being downloaded with this same URI.",
+				(_, GidStatus::Paused) => "A paused download already exists.",
+				(_, GidStatus::Waiting) => "There is a download from this URI in waiting queue.",
+				(_, GidStatus::Stopped) => "There is a stopped download from this URI.",
+				(_, GidStatus::Error) => "There is an error download from this source URI.",
+				_ => "URI already exists.", // Handles Seeding / other edge cases safely
+			}.to_string();
+
+			return Some(DuplicateConflict {
+				message,
+                name: record_name,
+				status: Some(rec.status),
+				gid: Some(rec.gid),
+                conflict_type: "uri".to_string(),
+            });
+
+        } else if files_exist {
+			return Some(DuplicateConflict {
+				name: record_name,
+                gid: Some(rec.gid),
+				status: Some(rec.status),
+                conflict_type: "file".to_string(),
+                message: "File with this name is already downloaded.".to_string(),
+            });
         }
     }
 
     // Check untracked physical files on disk
     // If the DB query found nothing,
     //  * explicitly check if a file with this name is sitting in the aria2 directory.
-    if !name.is_empty() && name != UNTITLED {
+	if !name.is_empty() && name != UNTITLED {
         let physical_path = Path::new(&state.config.aria2_dir).join(name);
         if physical_path.exists() {
-            return Some((
-                None,                               // No GID because the database doesn't know about this file
-                name.to_string(),
-                "untrackedFile".to_string(),
-                "An untracked file with this name already exists in the download directory.".to_string()
-            ));
+            return Some(DuplicateConflict {
+                gid: None,									// No GID because the database doesn't know about this file
+				status: None,
+                name: name.to_string(),
+                conflict_type: "untrackedFile".to_string(),
+                message: "An untracked file with this name already exists in the download directory.".to_string(),
+            });
         }
     }
 
     None
 }
 
-/// Dynamic endpoint to check if a newly typed name conflicts with db or Disk
+/// Check if a newly typed name conflicts with db or Disk
 pub async fn check_name_conflict(
     State(state): State<AppState>,
     Json(payload): Json<CheckNameReq>,
@@ -445,13 +567,14 @@ pub async fn check_name_conflict(
 
 
 /// Specially for adding torrent files
+/// Accepts torrents file base64 txt
 pub async fn add_torrents(
     State(state): State<AppState>,
     user: AuthenticatedUser,
     Json(payload): Json<BatchAddTorrentReq>,
 ) -> impl IntoResponse {
     if payload.torrents.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "No torrents provided" })));
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "No torrents provided." })));
     }
     /*
       * Build the multicall params
@@ -491,7 +614,7 @@ pub async fn add_torrents(
 					let _ = tokio::fs::remove_file(path).await;
 				}
 				return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!(
-							{ "error": "Failed to initialize server storage directories" })));
+							{ "error": "Failed to initialize server storage directory." })));
 			}
 		}
 
@@ -501,7 +624,7 @@ pub async fn add_torrents(
 				let _ = tokio::fs::remove_file(path).await;
 			}
 			return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!(
-						{ "error": "Failed to persist torrent data to server storage" })));
+						{ "error": "Failed to persist torrent data to server storage." })));
 		}
 
 		saved_file_paths.push(torrent_path.clone());
@@ -519,7 +642,7 @@ pub async fn add_torrents(
 				let _ = tokio::fs::remove_file(path).await;
 			}
 			return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!(
-						{ "error": "Database tracking registration failed" })));
+						{ "error": "Database tracking registration failed." })));
 		};
 
         generated_gids.push(gid.clone());
@@ -600,7 +723,7 @@ pub async fn add_torrents(
                     }
                 }
             }
-            (StatusCode::OK, Json(json!({ "results": results })))
+            (StatusCode::OK, Json(json!({ "data": results })))
         }
         Err(e) => {
             error!("Failed to batch torrents: {}", e);
@@ -614,6 +737,119 @@ pub async fn add_torrents(
             (StatusCode::BAD_GATEWAY, Json(json!({ "error": e })))
         }
     }
+}
+
+
+/// Parse a torrent file
+pub fn parse_torrent_bytes(bytes: &[u8]) -> Result<ParsedTorrent, String> {
+    let meta: TorrentMeta = serde_bencode::from_bytes(bytes)
+        .map_err(|e| format!("Failed to parse torrents base64: {}", e))?;
+
+    // Parse into generic value to preserve
+	// All info keys for exact `SHA-1` hashing
+    let value: serde_bencode::value::Value = serde_bencode::from_bytes(bytes)
+        .map_err(|e| format!("Failed to parse raw torrents value: {}", e))?;
+
+    let info_bytes = match value {
+        serde_bencode::value::Value::Dict(map) => match map.get(&b"info"[..]) {
+            Some(info_val) => serde_bencode::to_bytes(info_val)
+                .map_err(|e| format!("Failed to re-encode info dict: {}", e))?,
+            None => return Err("Missing 'info' dictionary in torrent file.".to_string()),
+        },
+        _ => return Err("Invalid torrent file structure.".to_string()),
+    };
+
+    let mut hasher = Sha1::new();
+    hasher.update(&info_bytes);
+    let info_hash = hex::encode(hasher.finalize());
+
+    let name = meta.info.name.clone().unwrap_or_else(|| "Unknown".to_string());
+    let total_size = meta.info.total_size();
+    let is_private = meta.info.is_private();
+
+    Ok(ParsedTorrent {
+        name,
+        total_size,
+        is_private,
+        info_hash,
+    })
+}
+
+/// Get torrents info
+pub async fn probe_torrents(
+    State(state): State<AppState>,
+    _user: AuthenticatedUser,
+    Json(payload): Json<TorsProbeReq>,
+) -> impl IntoResponse {
+    if payload.torrents.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "No torrents provided to probe." })),
+        );
+    }
+
+    let mut results = Vec::new();
+
+    for (i, base64_str) in payload.torrents.into_iter().enumerate() {
+        // Decode Base64
+        let bytes = match STANDARD.decode(&base64_str) {
+            Ok(b) => b,
+            Err(e) => {
+                results.push(TorsProbeRes {
+                    index: i,
+                    name: None,
+                    info_hash: None,
+                    total_length: None,
+                    is_private: None,
+					is_duplicate: None,
+                    conflict: None,
+                    probe_error: Some(format!("Invalid Base64 string: {}", e)),
+                });
+                continue;
+            }
+        };
+
+        // Extract metadata & calculate info_hash
+        let torrent = match parse_torrent_bytes(&bytes) {
+            Ok(t) => t,
+            Err(e) => {
+                results.push(TorsProbeRes {
+                    index: i,
+                    name: None,
+                    info_hash: None,
+                    total_length: None,
+                    is_private: None,
+					is_duplicate: None,
+                    conflict: None,
+                    probe_error: Some(e),
+                });
+                continue;
+            }
+        };
+
+        // Probe duplicate logic
+        let conflict = find_duplicate(
+            &state,
+            "",								// Empty uri cause raw torrent file probes
+            &torrent.name,
+            &torrent.total_size.to_string(), // Its useless
+            Some(&torrent.info_hash),
+        )
+        .await;
+
+        results.push(TorsProbeRes {
+            index: i,
+            name: Some(torrent.name),
+            info_hash: Some(torrent.info_hash),
+            total_length: Some(torrent.total_size.to_string()),
+            is_private: Some(torrent.is_private),
+            is_duplicate: None,
+            conflict,
+            probe_error: None,
+        });
+    }
+
+    (StatusCode::OK, Json(json!({ "data": results })))
 }
 
 
@@ -646,7 +882,7 @@ pub async fn pause(
                         let gid_clone = gid.clone();
 						// Mark to `resume` to `waiting`
                         tokio::spawn(async move {
-                            HistoryService::handle_event(&state_clone, gid_clone, Some("paused")).await;
+                            HistoryService::handle_event(&state_clone, &gid_clone, Some("paused")).await;
                         });
                     }
                 }
@@ -658,17 +894,16 @@ pub async fn pause(
                     .into_response()
             }
             Err(e) => {
-                error!("`{}` failed: {}", method, e);
+                error!("`{}` failed: {}", method, &e);
                 (
                     StatusCode::BAD_GATEWAY,
-                    Json(json!({ "error": e.to_string(), "success": false })),
-                )
-                    .into_response()
+                    Json(json!({ "error": format!("Method '{}' failed: {}", method, e.to_string()) })),
+                ).into_response()
             }
         };
     }
 
-    // Validate GIDs for the batch multicall
+    // Validate gids for the batch multicall
     let gids = match &payload.gids {
         Some(gids) if !gids.is_empty() => gids,
         _ => {
@@ -713,10 +948,10 @@ pub async fn pause(
                         let state_clone = state.clone();
                         let gid_clone = returned_gid.to_string();
 
-                        // Fire and forget history update to avoid blocking response
+                        // History update to avoid blocking response
 						// Mark to `resume` to `waiting`
                         tokio::spawn(async move {
-                            HistoryService::handle_event(&state_clone, gid_clone, Some("paused")).await;
+                            HistoryService::handle_event(&state_clone, &gid_clone, Some("paused")).await;
                         });
 
                         succeeded.push(expected_gid.clone());
@@ -772,10 +1007,10 @@ pub async fn pause(
             ).into_response()
         }
         Err(e) => {
-            error!("`system.multicall` failed for {}: {}", method, e);
+            error!("`system.multicall` failed for {}: {}", method, &e);
             (
                 StatusCode::BAD_GATEWAY,
-                Json(json!({ "error": e.to_string(), "success": false })),
+				Json(json!({ "error": format!("Method '{}' failed: {}", method, e.to_string()) })),
             ).into_response()
         }
     }
@@ -798,13 +1033,13 @@ pub async fn resume(
 
         return match state.aria2.call(method, vec![]).await {
             Ok(_) => {
-                if let Some(ref gids) = payload.gid {
+                if let Some(ref gids) = payload.gids {
                     for gid in gids {
                         let state_clone = state.clone();
                         let gid_clone = gid.clone();
 						// Mark to `resume` to `waiting`
                         tokio::spawn(async move {
-                            HistoryService::handle_event(&state_clone, gid_clone, Some("waiting")).await;
+                            HistoryService::handle_event(&state_clone, &gid_clone, Some("waiting")).await;
                         });
                     }
                 }
@@ -818,19 +1053,19 @@ pub async fn resume(
                 error!("`{}` failed: {}", method, e);
                 (
                     StatusCode::BAD_GATEWAY,
-                    Json(json!({ "error": e.to_string(), "success": false })),
+                    Json(json!({ "error": format!("Method '{}' failed: {}", method, e.to_string()) })),
                 ).into_response()
             }
         };
     }
 
     // Validate GIDs for the batch multicall
-    let gids = match &payload.gid {
+    let gids = match &payload.gids {
         Some(gids) if !gids.is_empty() => gids,
         _ => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "At least one GID or a `resume_all` flag is required" })),
+                Json(json!({ "error": "At least one GID or a `resume_all` flag is required." })),
             ).into_response();
         }
     };
@@ -863,10 +1098,10 @@ pub async fn resume(
                         let state_clone = state.clone();
                         let gid_clone = returned_gid.to_string();
 
-                        // Fire-and-forget history status update to 'waiting'
+                        // History status update to 'waiting'
 						// Mark to `resume` to `waiting`
                         tokio::spawn(async move {
-                            HistoryService::handle_event(&state_clone, gid_clone, Some("waiting")).await;
+                            HistoryService::handle_event(&state_clone, &gid_clone, Some("waiting")).await;
                         });
 
                         succeeded.push(expected_gid.clone());
@@ -904,7 +1139,7 @@ pub async fn resume(
                 return (
                     StatusCode::BAD_GATEWAY,
                     Json(json!({
-                        "error": "Failed to resume specified downloads",
+                        "error": "Failed to resume specified downloads.",
                         "method": method,
                         "failed": failed
                     })),
@@ -925,7 +1160,7 @@ pub async fn resume(
             error!("`system.multicall` failed for {}: {}", method, e);
             (
                 StatusCode::BAD_GATEWAY,
-                Json(json!({ "error": e.to_string(), "success": false })),
+                Json(json!({ "error": format!("Method '{}' failed: {}.", method, e.to_string()) })),
             ).into_response()
         }
     }
@@ -940,14 +1175,13 @@ pub async fn stop(
     Json(payload): Json<StopReq>,
 ) -> impl IntoResponse {
     // Validate GIDs
-    let gids = match &payload.gid {
+    let gids = match &payload.gids {
         Some(gids) if !gids.is_empty() => gids,
         _ => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "At least one GID is required to stop downloads" })),
-            )
-                .into_response();
+                Json(json!({ "error": "At least one GID." })),
+            ).into_response();
         }
     };
 
@@ -977,21 +1211,22 @@ pub async fn stop(
             if let Some(arr) = multicall_resp.as_array() {
                 for (i, res) in arr.iter().enumerate() {
                     let expected_gid = &gids[i];
-
+					println!("STOP ARR: {:?}", res);
                     // Success response format: [[ "gid1" ]]
                     if let Some(returned_gid) = res.as_array().and_then(|g| g.first()).and_then(|v| v.as_str()) {
                         let state_clone = state.clone();
                         let gid_clone = returned_gid.to_string();
 
-                        // Fire-and-forget: remove download result from aria2 memory & update history DB
+                        // Remove download result from aria2 memory & update history DB
                         tokio::spawn(async move {
                             let _ = state_clone.aria2.call("aria2.removeDownloadResult", vec![json!(gid_clone)]).await;
-                            HistoryService::handle_event(&state_clone, gid_clone, Some("stopped")).await;
+							sleep(Duration::from_millis(250)).await;
+                            HistoryService::handle_event(&state_clone, &gid_clone, Some("stopped")).await;
                         });
 
                         succeeded.push(expected_gid.clone());
                     }
-                    // Error response format: { "code": ..., "message": ... }
+                    // Error res format: { "code": ..., "message": ... }
                     else if let Some(err_obj) = res.as_object() {
                         let borrow_j = &json!(0);
                         let code = err_obj.get("code").unwrap_or(borrow_j);
@@ -1013,18 +1248,18 @@ pub async fn stop(
             }
 
             info!(
-                "Batch `{}` executed via multicall: {} succeeded, {} failed",
+                "Stop `{}` execution via multicall: {} succeeded, {} failed",
                 method,
                 succeeded.len(),
                 failed.len()
             );
 
-            // 4. Build response based on outcomes
+            // Build res based on outcomes
             if succeeded.is_empty() {
                 return (
                     StatusCode::BAD_GATEWAY,
                     Json(json!({
-                        "error": "Failed to stop specified downloads",
+                        "error": "Failed to stop specified downloads.",
                         "method": method,
                         "failed": failed
                     })),
@@ -1042,10 +1277,10 @@ pub async fn stop(
             ).into_response()
         }
         Err(e) => {
-            error!("`system.multicall` failed for {}: {}", method, e);
+            error!("Stopping failed for {}: {}", method, e);
             (
                 StatusCode::BAD_GATEWAY,
-                Json(json!({ "error": e.to_string(), "success": false })),
+                Json(json!({ "error": format!("Method '{}' failed: {}", method, e.to_string()) })),
             ).into_response()
         }
     }
@@ -1099,11 +1334,10 @@ pub async fn details(
     {
         Ok(item) => item,
         Err(e) => {
-            warn!("Failed to fetch download history for gid {}: {}", gid, e);
+            error!("Failed to fetch download history for gid {}: {}", gid, e);
             None
         }
     };
-
 
     let is_torrent = history_item
         .as_ref()
@@ -1147,7 +1381,7 @@ pub async fn details(
                 return (
                     StatusCode::NOT_FOUND,
                     Json(json!({
-                        "error": format!("GID {} not found", gid)
+                        "erorr": format!("GID {} not found", gid)
                     })),
                 );
             }
@@ -1165,7 +1399,7 @@ pub async fn details(
         }
         Err(e) => {
             if let Some(item) = history_item {
-                warn!("aria2 details lookup failed for gid {:?}: {:?}, Fetching data from db", gid, e);
+                error!("Aria2 details lookup failed for gid {:?}: {:?}, fetching data from db", gid, e);
                 (
                     StatusCode::OK,
                     Json(json!({
@@ -1302,7 +1536,7 @@ pub async fn retry(
             .execute(&state.db)
             .await;
 
-            (StatusCode::OK, Json(json!({ "status": "success", "newGid": new_gid }))) .into_response()
+            (StatusCode::OK, Json(json!({ "newGid": new_gid }))) .into_response()
         }
         Err(e) => (
             StatusCode::BAD_GATEWAY,
@@ -1311,26 +1545,8 @@ pub async fn retry(
     }
 }
 
-
-/// Ref: https://aria2.github.io/manual/en/html/aria2c.html#aria2.saveSession
-/// Try to save session
-pub async fn save_session(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-
-}
-
-
-/// Ref: https://aria2.github.io/manual/en/html/aria2c.html#aria2.changeUri
-pub async fn change_uri(
-    State(state): State<AppState>,
-    Json(payload): Json<MoveReq>,
-) -> impl IntoResponse {
-
-}
-
 /// Fetches the options snapshot from the local database instead of Aria2,
-/// ensuring availability even for `stopped` `removed` downloads.
+/// Ensuring availability even for `stopped` `removed` downloads.
 /// Ref: https://aria2.github.io/manual/en/html/aria2c.html#aria2.getOption
 pub async fn get_option(
     State(state): State<AppState>,
@@ -1351,10 +1567,10 @@ pub async fn get_option(
             );
         }
         Err(e) => {
-            error!("Database error fetching options for GID '{}': {:?}", payload.gid, e);
+            error!("Database error fetching options for GID '{}': {:?}", payload.gid, &e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "Internal server database error" })),
+                Json(serde_json::json!({ "error": format!("Internal server database error: {}", e.to_string()) })),
             );
         }
     };
@@ -1432,13 +1648,14 @@ pub async fn set_option(
         }
         Err(e) => {
             error!("Failed to change options for GID {}: {}", payload.gid, e);
-            (StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": e.to_string() })))
+            (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": format!("Failed to change options for GID: {}, {}", payload.gid, e.to_string()) })))
         }
     }
 }
 
 
 /// Ref: https://aria2.github.io/manual/en/html/aria2c.html#aria2.getGlobalOption
+/// This returns whole options
 pub async fn get_global_option(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
@@ -1446,7 +1663,7 @@ pub async fn get_global_option(
         Ok(options) => (StatusCode::OK,  Json(serde_json::json!({ "data": options }))),
         Err(e) => {
             error!("Failed to fetch global options: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() })))
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to retrieve global options: {}", e.to_string())  })))
         }
     }
 }
@@ -1506,7 +1723,7 @@ pub async fn set_global_option(
         },
         Err(e) => {
             error!("Failed to set global options: {}", e);
-            (StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": e.to_string() })))
+            (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": format!("Failed to set global options: {}", e.to_string()) })))
         }
     }
 }
@@ -1546,7 +1763,7 @@ pub async fn set_cmd_option(
     if let Err(err) = state.daemon.restart(&state.config, &existing_cmd).await {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "status": "error", "error": format!("Daemon launch failed: {}", err) })),
+            Json(serde_json::json!({ "error": format!("Daemon launch failed: {}", err.to_string()) })),
         );
     }
 
@@ -1587,7 +1804,7 @@ pub async fn set_cmd_option(
 /*
 	Search (no overhead of querying all and ranking)
 */
-const SEARCH_DEFAULT_PER_PAGE: u32 = 20;
+const SEARCH_DEFAULT_PER_PAGE: u32 = 15;
 const SEARCH_MAX_PER_PAGE: u32 = 100;
 
 fn normalize_search_text(input: &str) -> String {
@@ -1611,6 +1828,7 @@ fn normalized_extension(extension: &str) -> Option<String> {
     }
 }
 
+/// Later use the `file-format` crate to widely map all files ext
 fn file_type_extensions(file_type: &str) -> Option<&'static [&'static str]> {
     match normalize_search_text(file_type).as_str() {
         "image" | "images" => Some(&[
@@ -1648,7 +1866,7 @@ fn file_type_extensions(file_type: &str) -> Option<&'static [&'static str]> {
 }
 
 fn push_field_like_predicate(
-    qb: &mut sqlx::QueryBuilder<sqlx::Sqlite>,
+    qb: &mut QueryBuilder<sqlx::Sqlite>,
     column: &str,
     pattern: &str,
 ) {
@@ -1659,7 +1877,7 @@ fn push_field_like_predicate(
 }
 
 fn push_text_match_predicate(
-    qb: &mut sqlx::QueryBuilder<sqlx::Sqlite>,
+    qb: &mut QueryBuilder<sqlx::Sqlite>,
     q_norm: &str,
     tokens: &[String],
 ) {
@@ -1867,11 +2085,11 @@ pub async fn search(
             Err(e) => {
                 error!(
                     "Failed to count search results for user {}: {}",
-                    user.user_id, e
+                    user.user_id, &e
                 );
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": "Failed to fetch search results" })),
+                    Json(json!({ "error": format!("Failed to retrieve search results: {:?}", e.to_string()), })),
                 );
             }
         }
@@ -1896,7 +2114,7 @@ pub async fn search(
                 error!("Failed to fetch search results for user {}: {}", user.user_id, e);
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": "Failed to fetch search results" })),
+                    Json(json!({ "error": format!("Failed to retrieve search results: {}", e.to_string()) })),
                 );
             }
         }
@@ -2081,33 +2299,6 @@ fn parse_aria2c_version_stdout(stdout: &str) -> Value {
     })
 }
 
-
-pub async fn purge_results(State(state): State<AppState>) -> impl IntoResponse {
-    match state.aria2.call("aria2.purgeDownloadResult", vec![]).await {
-        Ok(_) => (StatusCode::OK, Json(json!({ "status": "purged" }))),
-        Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({ "error": e }))),
-    }
-}
-
-
-pub async fn move_position(
-    State(state): State<AppState>,
-    Json(payload): Json<MoveReq>,
-) -> impl IntoResponse {
-    let params = vec![
-        json!(payload.gid),
-        json!(payload.pos),
-        json!(payload.how)
-    ];
-
-    state.aria2.call("aria2.changePosition", params)
-        .await
-        .inspect(|res| info!("Successfully executed multicall: {:?}", res))
-        .inspect_err(|e| info!("failed to add uri: {:?}", e))
-        .map(|results| (StatusCode::OK, Json(json!({ "newPosition": results }))))
-        .unwrap_or_else(|e| (StatusCode::BAD_GATEWAY, Json(json!({ "error": e.to_string() }))))
-}
-
 /// History sort impls
 impl SortBy {
     pub fn to_sql_column(&self) -> &'static str {
@@ -2128,14 +2319,15 @@ impl Order {
     }
 }
 
-/// Get dl history based on query
+/// Get ddl history based on query
+/// Query should also include the status criteria
 pub async fn get_history(
     State(state): State<AppState>,
     user: AuthenticatedUser,
     Query(params): Query<PaginationQuery>,
 ) -> impl IntoResponse {
-    let page = params.page.unwrap_or(1);
-    let limit = params.limit.unwrap_or(15);
+    let page = params.page.unwrap_or(1).max(1);
+    let limit = params.limit.unwrap_or(15).max(1);
     let offset = (page - 1) * limit;
 
 	// Resolve column name direction from enums
@@ -2166,7 +2358,7 @@ pub async fn get_history(
 
     let has_more = page < total_pages;
 
-	let mut query: sqlx::QueryBuilder<sqlx::Sqlite> = sqlx::QueryBuilder::new(
+	let mut query: QueryBuilder<Sqlite> = QueryBuilder::new(
         r#"
         SELECT
             gid,
@@ -2199,7 +2391,8 @@ pub async fn get_history(
         FROM download_history
         WHERE user_id = "#
     );
-	query.push_bind(user.user_id);
+
+	query.push_bind(&user.user_id);
 
     // Dynamically append the sort params
     query.push(" ORDER BY ");
@@ -2211,22 +2404,36 @@ pub async fn get_history(
     query.push(" OFFSET ");
     query.push_bind(offset);
 
-	let history: Vec<ItemMetaData> = query
-        .build_query_as::<ItemMetaData>()
-        .fetch_all(&state.db)
-        .await
-        .unwrap_or_default();
+	let history: Vec<ItemMetaData> = match query
+		.build_query_as::<ItemMetaData>()
+		.fetch_all(&state.db)
+		.await
+	{
+		Ok(data) => data,
+		Err(err) => {
+			error!("Failed to fetch download history for user id {}: {:?}", user.user_id, &err);
+			return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": format!("Failed to retrieve history: {}", err.to_string())
+                })),
+            ).into_response();
+		}
+	};
 
-    Json(json!({
-        "data": history,
-        "meta": {
-            "currentPage": page,
-            "perPage": limit,
-            "totalItems": total_items,
-            "totalPages": total_pages,
-            "hasMore": has_more
-        }
-    }))
+    (
+        StatusCode::OK,
+        Json(json!({
+            "data": history,
+            "meta": {
+                "currentPage": page,
+                "perPage": limit,
+                "totalItems": total_items,
+                "totalPages": total_pages,
+                "hasMore": has_more
+            }
+        }))
+    ).into_response()
 }
 
 
@@ -2335,5 +2542,150 @@ pub async fn delete(
     }
 
     Ok(Json(json!({ "status": "deleted" })))
+}
+
+
+/// Get count based on `ItemCategory` and `GidStatus`
+pub async fn get_item_stats(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let mut stats = ItemCoundStatsRes::default();
+    /*
+	  * Get minimal required col from `download_history`
+	  * Based on user
+	*/
+    let rows = sqlx::query_as::<_, DownloadRowForItemCount>(
+        r#"
+			SELECT name, status, kind
+			FROM download_history
+			WHERE user_id = ?
+        "#
+    )
+    .bind(&user.user_id)
+    .fetch_all(&state.db)
+    .await
+	.map_err(|e|
+		(StatusCode::INTERNAL_SERVER_ERROR,
+		Json(json!({ "error": format!("Failed to query download row: {}", e.to_string())
+	}))))?;
+
+    // Process counts
+    for row in rows {
+        // Increment 'all' and 'everything' base counts
+        stats.by_status.all += 1;
+        stats.by_category.everything += 1;
+
+        // Status mapping
+        match row.status.as_str() {
+            "active" => stats.by_status.active += 1,
+            "paused" => stats.by_status.paused += 1,
+            "waiting" => stats.by_status.waiting += 1,
+            "complete" => stats.by_status.complete += 1,
+            "removed" => stats.by_status.removed += 1,
+            "stopped" => stats.by_status.stopped += 1,
+            "error" => stats.by_status.error += 1,
+            "seeding" => stats.by_status.seeding += 1,
+            _ => {}												// Fallback
+        }
+
+        // Category mapping
+        let category = ItemCategory::determine(row.name.as_deref(), &row.kind);
+        match category {
+            ItemCategory::Torrent => stats.by_category.torrent += 1,
+            ItemCategory::Music => stats.by_category.music += 1,
+            ItemCategory::Photos => stats.by_category.photos += 1,
+            ItemCategory::Programs => stats.by_category.programs += 1,
+            ItemCategory::Videos => stats.by_category.videos += 1,
+            ItemCategory::Subtitles => stats.by_category.subtitles += 1,
+            ItemCategory::Compressed => stats.by_category.compressed += 1,
+            ItemCategory::Others => stats.by_category.others += 1,
+            ItemCategory::Everything => {}						// Fallback
+        }
+    }
+
+    Ok(Json(json!({ "data": stats })))
+}
+
+impl ItemCategory {
+    pub fn determine(name: Option<&str>, kind: &str) -> Self {
+		if kind == "torrent" {
+            return ItemCategory::Torrent;
+        }
+
+		let Some(filename) = name else {
+            return ItemCategory::Others;
+		};
+
+		if filename.ends_with(".torrent") {
+            return ItemCategory::Torrent;
+        }
+
+        // Guess the format by extension without reading the file from disk
+		let ext = std::path::Path::new(filename)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+
+		if let Some(format) = FileFormat::from_extension(ext).first() {
+            match format.kind() {
+                FileKind::Audio => ItemCategory::Music,
+                FileKind::Image => ItemCategory::Photos,
+                FileKind::Executable | FileKind::Package | FileKind::Rom => ItemCategory::Programs,
+                FileKind::Video => ItemCategory::Videos,
+                FileKind::Subtitle => ItemCategory::Subtitles,
+                FileKind::Archive | FileKind::Compressed => ItemCategory::Compressed,
+                _ => ItemCategory::Others,
+            }
+        } else {
+            ItemCategory::Others
+        }
+    }
+}
+
+/// Ref: https://aria2.github.io/manual/en/html/aria2c.html#aria2.changeUri
+/// Change the URI by GID
+pub async fn change_uri(
+    State(state): State<AppState>,
+    Json(payload): Json<ChangeUriReq>,
+) -> impl IntoResponse {
+
+}
+
+// Handler for seeding
+/// Only complete dl can be seeded,
+/// take multiple gids & an optional arg to stop seeding
+pub async fn manage_seeding(
+    State(state): State<AppState>,
+    Json(payload): Json<ChangeUriReq>,
+) -> impl IntoResponse {
+
+}
+
+/// Ref: https://aria2.github.io/manual/en/html/aria2c.html#aria2.purgeDownloadResult
+/// Purge `completed, error, removed` dl and free aria2 memory
+pub async fn purge_results(State(state): State<AppState>) -> impl IntoResponse {
+    match state.aria2.call("aria2.purgeDownloadResult", vec![]).await {
+        Ok(_) => (StatusCode::OK, Json(json!({ "status": "purged" }))),
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({ "error": e }))),
+    }
+}
+
+pub async fn move_position(
+    State(state): State<AppState>,
+    Json(payload): Json<MoveReq>,
+) -> impl IntoResponse {
+    let params = vec![
+        json!(payload.gid),
+        json!(payload.pos),
+        json!(payload.how)
+    ];
+
+    state.aria2.call("aria2.changePosition", params)
+        .await
+        .inspect(|res| info!("Successfully executed multicall: {:?}", res))
+        .inspect_err(|e| info!("failed to add uri: {:?}", e))
+        .map(|results| (StatusCode::OK, Json(json!({ "newPosition": results }))))
+        .unwrap_or_else(|e| (StatusCode::BAD_GATEWAY, Json(json!({ "error": e.to_string() }))))
 }
 

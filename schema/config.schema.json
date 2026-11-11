@@ -88,6 +88,20 @@
             "null"
           ]
         },
+        "rpc_passwd": {
+          "description": "Aria2 JSON-RPC user password. Optional; no default value.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rpc_user": {
+          "description": "Aria2 JSON-RPC user name. Optional; no default value.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "secret": {
           "description": "Aria2 JSON-RPC secret token. Optional; no default value. You must have to set a Aria2 secret value.",
           "type": [

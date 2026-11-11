@@ -116,14 +116,15 @@ export const settingsSections: OptionSection[] = [
 		description: "Core configurations for the aria2 daemon and global behavior.",
 		icon: "settings",
 		fields: [
-			// Editable
+			// Keep global dir readonly
 			{
 				key: "dir",
 				label: "dir",
-				description: "Default download directory.",
+				description: "Default global download directory. Only can be change from `config.toml` file",
 				type: "text",
-				target: "global",
+				target: "readonly",
 			},
+			// Editable
 			{
 				key: "log",
 				label: "log",

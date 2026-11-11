@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n\t\t\t\tUPDATE download_history\n\t\t\t\tSET\n\t\t\t\t\tstatus = COALESCE(?, status),\n\t\t\t\t\tupdated_at = CASE WHEN ? IS NOT NULL THEN CURRENT_TIMESTAMP ELSE updated_at END\n\t\t\t\tWHERE gid = ?\n\t\t\t\tRETURNING\n\t\t\t\t\tgid,\n\t\t\t\t\tname,\n\t\t\t\t\tkind as \"kind: Kind\",\n\t\t\t\t\tstatus as \"status: GidStatus\",\n\t\t\t\t\tdir,\n\t\t\t\t\tfiles,\n\t\t\t\t\ttotal_length,\n\t\t\t\t\tcompleted_length,\n\t\t\t\t\tupload_length,\n\t\t\t\t\tsource_uri,\n\t\t\t\t\tinfo_hash,\n\t\t\t\t\tseeder,\n\t\t\t\t\tcontent_hash,\n\t\t\t\t\terror_code,\n\t\t\t\t\terror_message,\n\t\t\t\t\ttorrent as \"torrent: sqlx::types::Json<TorrentMagnetMeta>\",\n\t\t\t\t\toptions,\n\t\t\t\t\tis_resume_supported,\n\t\t\t\t\tconnections,\n\t\t\t\t\tnum_pieces,\n\t\t\t\t\tnum_seeders,\n\t\t\t\t\tpiece_length,\n\t\t\t\t\tverified_length,\n\t\t\t\t\tverify_integrity_pending,\n\t\t\t\t\tcreated_at,\n\t\t\t\t\tcompleted_at,\n\t\t\t\t\tuser_id\n            ",
+  "query": "\n\t\t\tSELECT\n\t\t\t\tgid,\n\t\t\t\tname,\n\t\t\t\tkind as \"kind: Kind\",\n\t\t\t\tcategory as \"category: Category\",\n\t\t\t\tstatus as \"status: GidStatus\",\n\t\t\t\tdir,\n\t\t\t\tfiles,\n\t\t\t\ttotal_length,\n\t\t\t\tcompleted_length,\n\t\t\t\tupload_length,\n\t\t\t\tsource_uri,\n\t\t\t\tinfo_hash,\n\t\t\t\tseeder,\n\t\t\t\tcontent_hash,\n\t\t\t\terror_code,\n\t\t\t\terror_message,\n\t\t\t\ttorrent,\n\t\t\t\toptions,\n\t\t\t\tis_resume_supported,\n\t\t\t\tnum_pieces,\n\t\t\t\tpiece_length,\n\t\t\t\tverified_length,\n\t\t\t\tverify_integrity_pending,\n\t\t\t\tcreated_at as \"created_at!\",\n\t\t\t\tcompleted_at as \"completed_at\",\n\t\t\t\tuser_id\n\t\t\tFROM download_history\n\t\t\tWHERE gid = ?\n        ",
   "describe": {
     "columns": [
       {
@@ -19,82 +19,82 @@
         "type_info": "Text"
       },
       {
-        "name": "status: GidStatus",
+        "name": "category: Category",
         "ordinal": 3,
         "type_info": "Text"
       },
       {
-        "name": "dir",
+        "name": "status: GidStatus",
         "ordinal": 4,
         "type_info": "Text"
       },
       {
-        "name": "files",
+        "name": "dir",
         "ordinal": 5,
         "type_info": "Text"
       },
       {
-        "name": "total_length",
+        "name": "files",
         "ordinal": 6,
         "type_info": "Text"
       },
       {
-        "name": "completed_length",
+        "name": "total_length",
         "ordinal": 7,
         "type_info": "Text"
       },
       {
-        "name": "upload_length",
+        "name": "completed_length",
         "ordinal": 8,
         "type_info": "Text"
       },
       {
-        "name": "source_uri",
+        "name": "upload_length",
         "ordinal": 9,
         "type_info": "Text"
       },
       {
-        "name": "info_hash",
+        "name": "source_uri",
         "ordinal": 10,
         "type_info": "Text"
       },
       {
-        "name": "seeder",
+        "name": "info_hash",
         "ordinal": 11,
-        "type_info": "Bool"
+        "type_info": "Text"
       },
       {
-        "name": "content_hash",
+        "name": "seeder",
         "ordinal": 12,
         "type_info": "Text"
       },
       {
-        "name": "error_code",
+        "name": "content_hash",
         "ordinal": 13,
+        "type_info": "Text"
+      },
+      {
+        "name": "error_code",
+        "ordinal": 14,
         "type_info": "Integer"
       },
       {
         "name": "error_message",
-        "ordinal": 14,
-        "type_info": "Text"
-      },
-      {
-        "name": "torrent: sqlx::types::Json<TorrentMagnetMeta>",
         "ordinal": 15,
         "type_info": "Text"
       },
       {
-        "name": "options",
+        "name": "torrent",
         "ordinal": 16,
         "type_info": "Text"
       },
       {
-        "name": "is_resume_supported",
+        "name": "options",
         "ordinal": 17,
-        "type_info": "Bool"
+        "type_info": "Text"
       },
       {
-        "name": "connections",
+        "name": "is_resume_supported",
         "ordinal": 18,
         "type_info": "Text"
       },
@@ -104,51 +104,45 @@
         "type_info": "Text"
       },
       {
-        "name": "num_seeders",
+        "name": "piece_length",
         "ordinal": 20,
         "type_info": "Text"
       },
       {
-        "name": "piece_length",
+        "name": "verified_length",
         "ordinal": 21,
         "type_info": "Text"
       },
       {
-        "name": "verified_length",
+        "name": "verify_integrity_pending",
         "ordinal": 22,
         "type_info": "Text"
       },
       {
-        "name": "verify_integrity_pending",
+        "name": "created_at!",
         "ordinal": 23,
-        "type_info": "Bool"
-      },
-      {
-        "name": "created_at",
-        "ordinal": 24,
         "type_info": "Datetime"
       },
       {
         "name": "completed_at",
-        "ordinal": 25,
+        "ordinal": 24,
         "type_info": "Datetime"
       },
       {
         "name": "user_id",
-        "ordinal": 26,
+        "ordinal": 25,
         "type_info": "Text"
       }
     ],
     "parameters": {
-      "Right": 3
+      "Right": 1
     },
     "nullable": [
       false,
       true,
       false,
+      true,
       false,
-      true,
-      true,
       true,
       true,
       true,
@@ -172,5 +166,5 @@
       false
     ]
   },
-  "hash": "ad0e92a9dd01bcaf03fb747a8b410af8410edb4b5a87850686e3e7e05863f323"
+  "hash": "af436f449d12d4eb76b44383ccba7a22a7d966e21867e323cc240a17b7978bd5"
 }

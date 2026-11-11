@@ -2,8 +2,8 @@
 	import { toast } from "svelte-sonner";
 	import { truncateMiddle } from "$lib/utils";
 	import { aria2, aria2Info } from "$lib/aria2/client.svelte";
-	import * as Select from "$lib/components/ui/select";
 	import { Button } from "$lib/components/ui/button";
+	import * as Select from "$lib/components/ui/select";
   import * as Tooltip from "$lib/components/ui/tooltip";
 	import * as PopoverTooltip from '$lib/components/ui/popovertooltip';
 	import {
@@ -22,9 +22,12 @@
 		Cancel01Icon,
 		Delete01Icon,
 		FileLinkIcon,
+		ArrowUp01Icon,
 		FloppyDiskIcon,
 		Download03Icon,
+		ArrowDown01Icon,
 		LoaderPinwheelIcon,
+		GitMergeConflictIcon,
 		DashboardCircleSettingsIcon,
 	} from "@hugeicons/core-free-icons";
 	import { formatBytes } from "$lib/utils";
@@ -37,6 +40,7 @@
 		ItemMetaData,
 		Aria2Options
 	} from "$lib/aria2/types";
+	import Virtual from '$lib/components/Virtual.svelte';
 	import OptionsDialog from "$lib/components/settings/Options.svelte";
 
 	type ConflictAction =
@@ -82,6 +86,7 @@
 	let integrityRequiresChecksum = $state(true);
 
 	let hasUnresolvedConflicts = $derived(items.some((i) => i.uiStatus === "pendingConflict"));
+	let conflictCount = $derived(items.filter((i) => i.uiStatus === "pendingConflict").length);
 	let allDoneOrFatal = $derived(
 		items.length > 0 && items.every((i) => i.uiStatus === "done" || i.uiStatus === "fatalError")
 	);
@@ -122,7 +127,9 @@
 	}
 
 	function isPermissibleProbeError(message: string | null | undefined) {
-		return normalizeText(message) === normalizeText("Magnet metadata resolution failed.");
+		const normalized = normalizeText(message);
+		return normalized === normalizeText("Magnet metadata resolution failed.") ||
+	       normalized === normalizeText("Private torrent, set credentials in options.");
 	}
 
 	async function fetchPreflight() {
@@ -310,7 +317,7 @@
 						// await aria2.redownload(item.existingGid);
 						break;
 					case "resume":
-						// await aria2.resume(item.existingGid);
+						await aria2.resume([item.conflict?.gid]);
 						break;
 					case "movePosition":
 						// await aria2.movePosInQueue(item.existingGid);
@@ -344,11 +351,31 @@
 		if (hasUnresolvedConflicts) return;
 
 		isSubmitting = true;
+		const readyItems = items.filter((i) => i.uiStatus === "ready");
 		const skippedItems = items.filter((i) => i.uiStatus === "fatalError").length;
 
-		for (let i = 0; i < items.length; i++) {
-			if (items[i].uiStatus === "ready") {
-				await performItemAction(i);
+		if (readyItems.length > 0) {
+			try {
+				const tasks: AddUriTask[] = readyItems.map((item) => buildTask(item));
+				const uriReq: AddUriReq = { tasks };
+				const results = await aria2.addUris(uriReq);
+
+				if (results && results.length > 0) {
+					readyItems.forEach((item, idx) => {
+						const itemIndex = items.indexOf(item);
+						if (itemIndex !== -1) {
+							items[itemIndex].uiStatus =
+								results[idx] && !results[idx].error ? "done" : "fatalError";
+						}
+					});
+				}
+			} catch (e) {
+				readyItems.forEach((item) => {
+					const itemIndex = items.indexOf(item);
+					if (itemIndex !== -1) {
+						items[itemIndex].uiStatus = "fatalError";
+					}
+				});
 			}
 		}
 
@@ -404,17 +431,19 @@
 
 	async function handleConflictAction(index: number, action: ConflictAction) {
 		const item = items[index];
-
+		console.log("item.conflict?.gid:", item.conflict?.gid)
 		switch (action) {
 			case "overwrite":
 			case "copy":
-				item.selectedAction = action;
-				item.conflictOptions = buildConflictOptions(action);
-				item.uiStatus = "ready";
-				return;
+				if (item.conflict?.gid || item.conflict?.conflictType === "untrackedFile") {
+					item.selectedAction = action;
+					item.conflictOptions = buildConflictOptions(action);
+					item.uiStatus = "ready";
+				}
+			return;
 
 			case "verify":
-				if (item.isMagnet) {
+				if (item.isMagnet && item.conflict?.gid) {
 					item.selectedAction = action;
 					item.conflictOptions = buildConflictOptions(action);
 					item.uiStatus = "ready";
@@ -426,36 +455,48 @@
 
 			case "redownload":
 				if (item.conflict?.gid) {
+					item.selectedAction = action;
+					item.conflictOptions = buildConflictOptions(action);
 					item.uiStatus = "done";
 				}
 				return;
 
 			case "resume":
 				if (item.conflict?.gid) {
+					item.selectedAction = action;
+					item.conflictOptions = buildConflictOptions(action);
 					item.uiStatus = "done";
 				}
 				return;
 
 			case "movePosition":
 				if (item.conflict?.gid) {
+					item.selectedAction = action;
+					item.conflictOptions = buildConflictOptions(action);
 					item.uiStatus = "done";
 				}
 				return;
 
 			case "moveQueue":
 				if (item.conflict?.gid) {
+					item.selectedAction = action;
+					item.conflictOptions = buildConflictOptions(action);
 					item.uiStatus = "done";
 				}
 				return;
 
 			case "stopSeeding":
 				if (item.conflict?.gid) {
+					item.selectedAction = action;
+					item.conflictOptions = buildConflictOptions(action);
 					item.uiStatus = "done";
 				}
 				return;
 
 			case "retry":
 				if (item.conflict?.gid) {
+					item.selectedAction = action;
+					item.conflictOptions = buildConflictOptions(action);
 					item.uiStatus = "done";
 				}
 				return;
@@ -464,7 +505,7 @@
 
 	function getConflictButtonsAndRules(item: UIItem) {
 		const conflictType = item.conflict?.conflictType;
-		const status = item.conflict?.gid;
+		const status = item.conflict?.status;
 
 		if (!item.isDuplicate) {
 			return {
@@ -643,6 +684,110 @@
 			allowBypass: true
 		};
 	}
+
+	let virtualRef = $state<{ scrollToIndex: (index: number, behavior?: ScrollBehavior) => void } | null>(null);
+	let virtualViewportEl = $state<HTMLDivElement | null>(null);
+	let activeConflictIndex = $state<number | null>(null);
+	let highlightedIndex = $state<number | null>(null);
+	let highlightTimer: ReturnType<typeof setTimeout> | null = null;
+
+	const conflictIndices = $derived(
+		items
+			.map((item, index) => ({ item, index }))
+			.filter(({ item }) => item.uiStatus === "pendingConflict")
+			.map(({ index }) => index));
+
+	function getCurrentVisibleIndex(): number {
+		if (!virtualViewportEl) return 0;
+		const viewportRect = virtualViewportEl.getBoundingClientRect();
+		const rows = virtualViewportEl.querySelectorAll<HTMLElement>("[data-index]");
+		for (const row of rows) {
+			const rect = row.getBoundingClientRect();
+			if (rect.bottom > viewportRect.top + 30 && rect.top < viewportRect.top + 180) {
+				const idx = parseInt(row.getAttribute("data-index") || "", 10);
+				if (!isNaN(idx)) return idx;
+			}
+		}
+		const stride = 108 + 8;
+		return Math.floor((virtualViewportEl.scrollTop + 40) / stride);
+	}
+
+	function scrollToConflict(targetIndex: number) {
+		activeConflictIndex = targetIndex;
+    highlightedIndex = targetIndex;
+
+		if (virtualRef) {
+			virtualRef.scrollToIndex(targetIndex);
+		} else if (virtualViewportEl) {
+			const targetEl = virtualViewportEl.querySelector(`[data-index="${targetIndex}"]`) as HTMLElement | null;
+			if (targetEl) {
+				const targetTop = targetEl.offsetTop - (virtualViewportEl.clientHeight - targetEl.offsetHeight) / 2;
+				virtualViewportEl.scrollTo({ top: Math.max(0, targetTop), behavior: "smooth" });
+			}
+		}
+
+		const el = virtualViewportEl?.querySelector(`[data-index="${targetIndex}"]`) as HTMLElement | null;
+		if (el) {
+				el.classList.add("highlight-field");
+		}
+
+		if (highlightTimer) clearTimeout(highlightTimer);
+
+		highlightTimer = setTimeout(() => {
+			if (highlightedIndex === targetIndex) {
+					highlightedIndex = null;
+			}
+      const currentEl = virtualViewportEl?.querySelector(`[data-index="${targetIndex}"]`) as HTMLElement | null;
+			if (currentEl) {
+					currentEl.classList.remove("highlight-field");
+			}
+		}, 3500);
+	}
+
+	function hopToNextConflict() {
+		if (conflictIndices.length === 0) return;
+		let nextIndex: number;
+		if (activeConflictIndex === null) {
+			nextIndex = conflictIndices[0];
+		} else {
+			const currentIndexInList = conflictIndices.indexOf(activeConflictIndex);
+			if (currentIndexInList === -1) {
+				const next = conflictIndices.find((idx) => idx > activeConflictIndex!);
+				nextIndex = next !== undefined ? next : conflictIndices[0];
+			} else {
+				const nextPointer = (currentIndexInList + 1) % conflictIndices.length;
+				nextIndex = conflictIndices[nextPointer];
+			}
+		}
+		scrollToConflict(nextIndex);
+	}
+
+	// function hopToPrevConflict() {
+	// 	if (conflictIndices.length === 0) return;
+	// 	const currentIdx = getCurrentVisibleIndex();
+	// 	const prevList = conflictIndices.filter((idx) => idx < currentIdx);
+	// 	const prevIdx = prevList.length > 0 ? prevList[prevList.length - 1] : conflictIndices[conflictIndices.length - 1];
+	// 	scrollToConflict(prevIdx);
+	// }
+
+	function hopToPrevConflict() {
+		if (conflictIndices.length === 0) return;
+
+		let prevIndex: number;
+		if (activeConflictIndex === null) {
+			prevIndex = conflictIndices[conflictIndices.length - 1];
+		} else {
+			const currentIndexInList = conflictIndices.indexOf(activeConflictIndex);
+			if (currentIndexInList === -1) {
+				const prevList = conflictIndices.filter((idx) => idx < activeConflictIndex!);
+				prevIndex = prevList.length > 0 ? prevList[prevList.length - 1] : conflictIndices[conflictIndices.length - 1];
+			} else {
+				const prevPointer = (currentIndexInList - 1 + conflictIndices.length) % conflictIndices.length;
+				prevIndex = conflictIndices[prevPointer];
+			}
+		}
+		scrollToConflict(prevIndex);
+	}
 </script>
 
 <Dialog bind:open onOpenChange={(v) => !v && onclose()}>
@@ -651,10 +796,31 @@
             bg-background/95 dark:bg-background/60 supports-backdrop-filter:bg-background/90 dark:supports-backdrop-filter:bg-background/60 backdrop-blur-xl border-border/50"
 		showCloseButton={false}
 	>
-		<DialogHeader class="mb-2 mt-2 ml-4 shrink-0 pb-2 relative after:absolute after:bottom-0 after:left-0 after:h-[1px] after:w-full
+		<DialogHeader class="mb-2 md:mt-2 md:ml-4 max-md:text-center shrink-0 md:pb-2 relative after:absolute after:bottom-0 after:left-0 after:h-[1px] after:w-full
 				after:bg-gradient-to-r after:from-transparent after:via-sidebar-border after:to-transparent
 			">
-			<DialogTitle class="sm:text-lg text-[18px] font-semibold">
+			<div class="inline-flex md:hidden flex-row justify-between">
+				<span class="text-muted-foreground text-[10px] font-normal inline-flex flex-col gap-1">
+					<HugeiconsIcon
+						icon={FileLinkIcon}
+						strokeWidth={2}
+						class="w-3 h-3 text-muted-foreground"
+					/>
+					{`{${uris.length}}`}
+				</span>
+				<DialogTitle class="sm:text-lg ml-2 text-[18px] font-semibold">
+					Review download queue...
+				</DialogTitle>
+				<span class="text-muted-foreground text-[10px] font-normal inline-flex flex-col gap-1">
+					<HugeiconsIcon
+						icon={GitMergeConflictIcon}
+						strokeWidth={2}
+						class="w-3 h-3 text-muted-foreground"
+					/>
+					{`{${conflictCount}}`}
+				</span>
+			</div>
+			<DialogTitle class="sm:text-lg max-md:hidden text-[18px] font-semibold">
 				Review download queue...
 			</DialogTitle>
 			<DialogDescription class="text-sm">
@@ -662,294 +828,445 @@
 			</DialogDescription>
 		</DialogHeader>
 
-		<div class="flex-1 overflow-y-auto space-y-3 pr-2 min-h-0 pb-16">
+		<div
+			class="flex-1 overflow-hidden space-y-3 pr-2 min-h-0"
+		>
 			<!-- Invisible focus anchor to absorb modal focus trap resets -->
 			<div tabindex="0" class="sr-only" aria-hidden="true"></div>
 
 			{#if isFetching}
-				<div class="flex flex-col items-center justify-center h-full space-y-4 text-muted-foreground min-h-[300px]"
+				<div class="flex flex-col items-center justify-center h-full w-full space-y-4 text-muted-foreground min-h-[300px]"
 				>
 					<HugeiconsIcon icon={LoaderPinwheelIcon} class="w-8 h-8 animate-spin" strokeWidth={2} />
-					<p class="text-sm animate-pulse">
+					<p class="text-sm text-center animate-pulse">
 						Probing servers and resolving metadata...
 					</p>
 				</div>
 			{:else}
-				{#each items as item, index (index)}
-					{@const catIcons = getCategoryIcons(item)}
-					<div
-						class="flex flex-col justify-center p-3 border-[0.1px] rounded-3xl transition-colors
-            {item.uiStatus === 'fatalError'
-							? 'border-destructive/40 bg-destructive/5'
-							: 'border-[#DDA0DD]/40 bg-[#DDA0DD]/5'}"
+				{#if items.length > 0}
+					<Virtual
+						bind:this={virtualRef}
+						bind:viewportEl={virtualViewportEl}
+						rowGap={8}
+						overscan={6}
+						height={600}
+						itemHeight={108}
+						items={items}
+						getKey={(item, i) => item.uri ?? i}
+						overflowX="hidden"
+						overflowY="auto"
+						autoHeight={true}
+						paddingBottom={100}
 					>
-						<div class="flex items-center gap-3 w-full">
-							<div class="w-6 h-6 shrink-0 flex items-center justify-center">
-								<img
-									src={catIcons.light}
-									alt="icon"
-									class="w-7 h-7 dark:hidden"
-								/>
-								<img
-									src={catIcons.dark}
-									alt="icon"
-									class="w-6 h-6 hidden dark:block"
-								/>
-							</div>
-							<div class="flex-1 relative">
-								<input
-									title={item.isMagnet ? "Magnets can't be renamed before downloading" : ""}
-									type="text"
-									bind:value={item.newName}
-									oninput={() => handleNameEdit(index)}
-									disabled={
-										item.uiStatus === "done" ||
-										item.uiStatus === "fatalError" ||
-										item.uiStatus === "downloading" ||
-										item.isMagnet}
-									class="w-[95%] text-sm fade-right font-medium bg-transparent border-b
-										hover:border-sidebar-border focus:border-muted-foreground focus:outline-none disabled:opacity-70
-										disabled:hover:border-transparent transition-colors px-1 truncate"
-								/>
-							</div>
-
-							<div class="shrink-0 flex items-center justify-end gap-1.5 w-auto pr-1">
-								{#if item.uiStatus === "done"}
-									<span
-										title={item.uiStatus === "done" ?
-											"Added to queue" : ""}
-									>
-										<HugeiconsIcon
-											icon={Checkmark}
-											class="w-5 h-5 text-muted-foreground"
-										/>
-									</span>
-
-								{:else if item.uiStatus === "downloading"}
-									<div class="bg-primary/10 text-primary p-1.5 rounded-full">
-										<HugeiconsIcon icon={LoaderPinwheelIcon} class="w-4 h-4 animate-spin" />
-									</div>
-
-								{:else if item.uiStatus === "fatalError"}
-									<Button
-										title="Remove item"
-										variant="ghost"
-										size="icon"
-										class="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-										onclick={() => removeItem(index)}
-									>
-										<HugeiconsIcon icon={Delete01Icon} class="w-4 h-4" />
-									</Button>
-								{:else}
-									<Button
-										title="Set options"
-										variant="ghost"
-										size="icon"
-										class="h-8 w-8 cursor-pointer disabled:cursor-not-allowed hover:bg-background/60"
-										onclick={() => openOptionsDialog(index)}
-									>
-										<HugeiconsIcon
-											icon={DashboardCircleSettingsIcon}
-											class="w-4 h-4"
-										/>
-									</Button>
-									<Button
-										title={item.uiStatus === "pendingConflict"
-											? "Resolve conflict first"
-											: "Add in download queue"}
-										variant="ghost"
-										size="icon"
-										class="h-8 w-8 cursor-pointer disabled:opacity-50"
-										disabled={item.uiStatus === "pendingConflict" && !item.allowBypassConflict}
-										onclick={() => downloadSingle(index)}
-									>
-										<HugeiconsIcon
-											icon={Download03Icon}
-											class="w-4 h-4"
-										/>
-									</Button>
-								{/if}
-							</div>
-						</div>
-
-						<div class="flex  ml-[2.5rem] flex-col space-y-2">
-							{#if item.uiStatus !== "fatalError"}
-								<div class="flex items-center gap-3 text-xs font-medium text-muted-foreground mr-2">
-									{#if item.uri && item.uri !== null &&  item.uri !== ""}
-										<div class="flex items-center">
-											<Tooltip.Provider>
-												<PopoverTooltip.Root>
-													<PopoverTooltip.Trigger>
-														<button
-															title="Click to copy URI"
-															onclick={() => navigator.clipboard.writeText(item.uri!)}
-															class="flex items-center gap-1.5 cursor-pointer text-muted-foreground"
-														>
-															<HugeiconsIcon
-																icon={FileLinkIcon}
-																strokeWidth={2}
-																class="w-3.5 h-3.5 text-muted-foreground"
-															/>
-															URI
-														</button>
-													</PopoverTooltip.Trigger>
-													<PopoverTooltip.Content
-														side="top"
-														class="max-w-[300px] z-[200]"
-													>
-														<p class="text-xs break-all">
-															{item.uri}
-														</p>
-													</PopoverTooltip.Content>
-												</PopoverTooltip.Root>
-											</Tooltip.Provider>
+						{#snippet row(item, index, style)}
+							{@const catIcons = getCategoryIcons(item)}
+							<div
+								{style}
+								data-index={index}
+								class:highlight-field={highlightedIndex === index}
+								class="flex flex-col justify-center p-0.5 md:p-3 border-[0.1px] rounded-3xl transition-colors
+								{
+									item.uiStatus === 'fatalError'
+									? 'border-destructive/40 bg-destructive/5'
+									: 'border-[#DDA0DD]/40 bg-[#DDA0DD]/5'
+								}"
+								>
+									<div class="flex items-center md:gap-3 w-full">
+										<div class="w-6 h-6 shrink-0 flex items-center justify-center">
+											<img
+												src={catIcons.light}
+												alt="icon"
+												class="h-5 w-5 md:w-7 md:h-7 dark:hidden"
+											/>
+											<img
+												src={catIcons.dark}
+												alt="icon"
+												class="h-5 w-5 md:w-7 md:h-7 hidden dark:block"
+											/>
 										</div>
-									{/if}
-									<div class="w-[1.5px] h-[16px] rounded-md bg-border"></div>
-									<div class="flex items-center gap-1.5 {item.isResumeSupported ? '' : 'text-destructive/80'}">
-										<HugeiconsIcon
-											icon={item.isResumeSupported ? Checkmark : Cancel01Icon}
-											class="w-3.5 h-3.5"
-										/>
-										{item.isResumeSupported ? "Resumable" : "Not resumable"}
-									</div>
-									{#if item.totalLength && item.totalLength !== "0"}
-										<div class="w-[1.5px] h-[16px] rounded-md bg-border"></div>
-										<div class="flex items-center gap-1.5">
-											<HugeiconsIcon icon={FloppyDiskIcon} class="w-3.5 h-3.5" />
-											{formatBytes(item.totalLength)}
+										<div class="flex-1 relative">
+											<input
+												title={item.isMagnet ? "Magnets can't be renamed before downloading" : ""}
+												type="text"
+												bind:value={item.newName}
+												oninput={() => handleNameEdit(index)}
+												disabled={
+													item.uiStatus === "done" ||
+													item.uiStatus === "fatalError" ||
+													item.uiStatus === "downloading" ||
+													item.isMagnet}
+												class="w-[95%] text-[13px] md:text-sm fade-right font-medium bg-transparent border-b
+													hover:border-sidebar-border focus:border-muted-foreground focus:outline-none disabled:opacity-70
+													disabled:hover:border-transparent transition-colors px-1 truncate"
+											/>
 										</div>
-									{/if}
-								</div>
-							{/if}
 
-							{#if item.probeError && item.uiStatus !== "fatalError"}
-								<div class="flex items-center gap-1.5 text-xs text-destructive font-medium">
-									<HugeiconsIcon icon={Alert01Icon} class="w-3.5 h-3.5" />
-									<span>{item.probeError}</span>
-								</div>
-							{/if}
-
-							{#if item.uiStatus === "fatalError"}
-								<div class="flex items-center gap-1.5 text-xs text-destructive font-medium">
-									<HugeiconsIcon icon={Alert01Icon} class="w-3.5 h-3.5" />
-									<span>
-										{item.probeError || "Invalid or unreachable URL"}
-									</span>
-								</div>
-
-							{:else if item.uiStatus === "pendingConflict"}
-								{@const rules = getConflictButtonsAndRules(item)}
-
-								<div class="flex items-center gap-3">
-									<span class="text-xs text-muted-foreground/90 font-medium flex items-center gap-1">
-										<HugeiconsIcon icon={Alert01Icon} class="w-3.5 h-3.5" />
-										{item.conflict?.message}
-									</span>
-									{#if rules.buttons.length > 0}
-										<div class="flex flex-wrap items-center gap-2">
-											{#each rules.buttons as action (action.action)}
-												{#if action.action === "verify" && !item.isMagnet}
-													<Button
-														size="sm"
-														variant="outline"
-														class="h-6 text-[11px] px-3 cursor-pointer border-[#DDA0DD]/60"
-														onclick={() => openIntegrityDialog(index)}
-													>
-														Verify integrity
-													</Button>
-												{:else}
-													<Button
-														size="sm"
-														variant="outline"
-														class="h-6 text-[11px] px-3 cursor-pointer border-[#DDA0DD]/60"
-														onclick={() => handleConflictAction(index, action.action)}
-													>
-														{action.label}
-													</Button>
-												{/if}
-											{/each}
-										</div>
-									{/if}
-								</div>
-
-							{:else if item.isDuplicate && item.allowBypassConflict && item.conflict?.message}
-								{@const rules = getConflictButtonsAndRules(item)}
-
-								<div class="flex flex-row items-center gap-3">
-									<span class="text-xs text-muted-foreground/90 font-medium flex items-center gap-1">
-										<HugeiconsIcon icon={Alert01Icon} class="w-3.5 h-3.5" />
-										{item.conflict?.message}
-									</span>
-									{#if rules.buttons.length > 0}
-										<div class="flex flex-wrap items-center gap-2">
-											{#each rules.buttons as action (action.action)}
-												<Button
-													size="sm"
-													variant="outline"
-													class="h-6 text-xs px-3 cursor-pointer border-[#DDA0DD]/60"
-													onclick={() => handleConflictAction(index, action.action)}
+										<div class="shrink-0 flex items-center justify-end gap-1.5 w-auto pr-1">
+											{#if item.uiStatus === "done"}
+												<span
+													title={item.uiStatus === "done" ?
+														"Added to queue" : ""}
 												>
-													{action.label}
+													<HugeiconsIcon
+														icon={Checkmark}
+														class="w-5 h-5 text-muted-foreground"
+													/>
+												</span>
+
+											{:else if item.uiStatus === "downloading"}
+												<div class="bg-primary/10 text-primary p-1.5 rounded-full">
+													<HugeiconsIcon icon={LoaderPinwheelIcon} class="w-4 h-4 animate-spin" />
+												</div>
+
+											{:else if item.uiStatus === "fatalError"}
+												<Button
+													title="Remove item"
+													variant="ghost"
+													size="icon"
+													class="h-8 w-8 text-muted-foreground cursor-pointer disabled:cursor-not-allowed hover:text-destructive hover:bg-destructive/10"
+													onclick={() => removeItem(index)}
+												>
+													<HugeiconsIcon
+														icon={Delete01Icon}
+														class="w-4 h-4"
+													/>
 												</Button>
-											{/each}
+											{:else}
+												<div class="hidden md:block">
+													<Button
+														title="Set options"
+														variant="ghost"
+														size="icon"
+														class="h-8 w-8 cursor-pointer disabled:cursor-not-allowed hover:bg-background/60"
+														onclick={() => openOptionsDialog(index)}
+													>
+														<HugeiconsIcon
+															icon={DashboardCircleSettingsIcon}
+															class="w-4 h-4"
+														/>
+													</Button>
+													<Button
+														title={item.uiStatus === "pendingConflict"
+															? "Resolve conflict first"
+															: "Add in download queue"}
+														variant="ghost"
+														size="icon"
+														class="h-8 w-8 cursor-pointer disabled:opacity-50"
+														disabled={item.uiStatus === "pendingConflict" && !item.allowBypassConflict}
+														onclick={() => downloadSingle(index)}
+													>
+														<HugeiconsIcon
+															icon={Download03Icon}
+															class="w-4 h-4"
+														/>
+													</Button>
+												</div>
+											{/if}
 										</div>
-									{/if}
-								</div>
-
-							{:else if item.selectedAction && item.uiStatus === "ready"}
-								<div class="flex items-center font-medium gap-2 text-xs">
-									<div class="text-muted-foreground flex gap-1.5 flex-row">
-										<HugeiconsIcon icon={Checkmark} class="w-3.5 h-3.5" />
-										<span>{getSelectedActionLabel(item.selectedAction)}</span>
 									</div>
-									<button
-										class="text-muted-foreground underline italic cursor-pointer hover:text-foreground ml-2 text-xs
-											decoration-muted-foreground/50 underline-offset-2 transition-colors focus:outline-none"
-										onclick={() => undoConflictResolution(index)}
-									>
-										Change
-									</button>
-								</div>
-							{/if}
 
-							{$inspect("item:", item)}
-						</div>
+									<div class="flex max-md:mx-2 max-md:mt-2 md:ml-[2.5rem] flex-col space-y-0.5 md:space-y-2">
+										{#if item.uiStatus !== "fatalError"}
+											<div class="flex items-center keep-in-center gap-1.5 md:mr-2 md:gap-3 text-xs font-medium text-muted-foreground">
+												{#if item.uri && item.uri !== null &&  item.uri !== ""}
+													<div class="flex items-center">
+														<Tooltip.Provider>
+															<PopoverTooltip.Root>
+																<PopoverTooltip.Trigger>
+																	<button
+																		title="Click to copy URI"
+																		onclick={() => navigator.clipboard.writeText(item.uri!)}
+																		class="flex items-center max-md:text-[12px] gap-1.5 cursor-pointer text-muted-foreground"
+																	>
+																		<HugeiconsIcon
+																			icon={FileLinkIcon}
+																			strokeWidth={2}
+																			class="w-3.5 h-3.5 text-muted-foreground"
+																		/>
+																		URI
+																	</button>
+																</PopoverTooltip.Trigger>
+																<PopoverTooltip.Content
+																	side="top"
+																	class="max-w-[300px] z-[200]"
+																>
+																	<p class="text-xs max-md:text-[12px] break-all">
+																		{item.uri}
+																	</p>
+																</PopoverTooltip.Content>
+															</PopoverTooltip.Root>
+														</Tooltip.Provider>
+													</div>
+												{/if}
+												<div class="w-[1.5px] h-[16px] rounded-md bg-border"></div>
+												<div class="flex items-center gap-1.5 max-md:text-[12px] {item.isResumeSupported ? '' : 'text-destructive/80'}">
+													<HugeiconsIcon
+														icon={item.isResumeSupported ? Checkmark : Cancel01Icon}
+														class="w-3.5 h-3.5"
+													/>
+													{item.isResumeSupported ? "Resumable" : "Not resumable"}
+												</div>
+												{#if item.totalLength && item.totalLength !== "0"}
+													<div class="w-[1.5px] h-[16px] rounded-md bg-border"></div>
+													<div class="flex items-center gap-1.5">
+														<HugeiconsIcon
+															icon={FloppyDiskIcon}
+															class="w-3.5 h-3.5"
+														/>
+														<span class="max-md:text-[12px]">
+															{formatBytes(item.totalLength)}
+														</span>
+													</div>
+												{/if}
+												<div class="w-[1.5px] h-[16px] md:hidden rounded-md bg-border"></div>
+												<button
+													title="Set options"
+													class="md:h-8 md:w-8 md:hidden cursor-pointer disabled:cursor-not-allowed hover:bg-background/60"
+													onclick={() => openOptionsDialog(index)}
+												>
+													<HugeiconsIcon
+														icon={DashboardCircleSettingsIcon}
+														class="w-4 h-4"
+													/>
+												</button>
+												<div class="w-[1.5px] h-[16px] md:hidden rounded-md bg-border"></div>
+												<button
+													title={item.uiStatus === "pendingConflict"
+														? "Resolve conflict first"
+														: "Add in download queue"}
+													class="md:h-8 md:w-8 md:hidden cursor-pointer disabled:opacity-50"
+													disabled={item.uiStatus === "pendingConflict" && !item.allowBypassConflict}
+													onclick={() => downloadSingle(index)}
+												>
+													<HugeiconsIcon
+														icon={Download03Icon}
+														class="w-4 h-4"
+													/>
+												</button>
+											</div>
+										{/if}
+
+										{#if item.probeError && item.uiStatus !== "fatalError"}
+											<div class="flex items-center gap-1.5 text-xs text-destructive font-medium">
+												<HugeiconsIcon icon={Alert01Icon} class="w-3.5 h-3.5" />
+												<span>{item.probeError}</span>
+											</div>
+										{/if}
+
+										{#if item.uiStatus === "fatalError"}
+											<div class="flex items-center gap-1.5 text-xs text-destructive font-medium">
+												<HugeiconsIcon icon={Alert01Icon} class="w-3.5 h-3.5" />
+												<span>
+													{item.probeError || "Invalid or unreachable URL"}
+												</span>
+											</div>
+
+										{:else if item.uiStatus === "pendingConflict"}
+											{@const rules = getConflictButtonsAndRules(item)}
+
+											<div class="flex items-center flex-col md:flex-row gap-3">
+												<span class="text-xs text-muted-foreground/90 font-medium flex items-center gap-1">
+													<HugeiconsIcon icon={Alert01Icon} class="w-3.5 h-3.5" />
+													{item.conflict?.message}
+												</span>
+												{#if rules.buttons.length > 0}
+													<div class="flex flex-wrap items-center gap-2">
+														{#each rules.buttons as action (action.action)}
+															{#if action.action === "verify" && !item.isMagnet}
+																<Button
+																	size="sm"
+																	variant="outline"
+																	class="h-6 text-[11px] px-3 cursor-pointer border-[#DDA0DD]/60"
+																	onclick={() => openIntegrityDialog(index)}
+																>
+																	Verify integrity
+																</Button>
+															{:else}
+																<Button
+																	size="sm"
+																	variant="outline"
+																	class="h-6 text-[11px] px-3 cursor-pointer border-[#DDA0DD]/60"
+																	onclick={() => handleConflictAction(index, action.action)}
+																>
+																	{action.label}
+																</Button>
+															{/if}
+														{/each}
+													</div>
+												{/if}
+											</div>
+
+										{:else if item.isDuplicate && item.allowBypassConflict && item.conflict?.message}
+											{@const rules = getConflictButtonsAndRules(item)}
+
+											<div class="flex flex-row items-center gap-3">
+												<span class="text-xs text-muted-foreground/90 font-medium flex items-center gap-1">
+													<HugeiconsIcon icon={Alert01Icon} class="w-3.5 h-3.5" />
+													{item.conflict?.message}
+												</span>
+												{#if rules.buttons.length > 0}
+													<div class="flex flex-wrap items-center gap-2">
+														{#each rules.buttons as action (action.action)}
+															<Button
+																size="sm"
+																variant="outline"
+																class="h-6 text-xs px-3 cursor-pointer border-[#DDA0DD]/60"
+																onclick={() => handleConflictAction(index, action.action)}
+															>
+																{action.label}
+															</Button>
+														{/each}
+													</div>
+												{/if}
+											</div>
+
+										{:else if item.selectedAction && item.uiStatus === "ready"}
+											<div class="flex items-center font-medium gap-2 text-xs">
+												<div class="text-muted-foreground flex gap-1.5 flex-row">
+													<HugeiconsIcon icon={Checkmark} class="w-3.5 h-3.5" />
+													<span>{getSelectedActionLabel(item.selectedAction)}</span>
+												</div>
+												<button
+													class="text-muted-foreground underline italic cursor-pointer hover:text-foreground ml-2 text-xs
+														decoration-muted-foreground/50 underline-offset-2 transition-colors focus:outline-none"
+													onclick={() => undoConflictResolution(index)}
+												>
+													Change
+												</button>
+											</div>
+										{/if}
+									</div>
+								</div>
+						{/snippet}
+					</Virtual>
+
+					{#if conflictIndices.length > 0}
+						<div
+							class="absolute bottom-5 right-6 z-20 flex flex-col items-center gap-0.5 p-1 rounded-full bg-background/90
+								dark:bg-card/90 backdrop-blur-md border border-border/80 shadow-lg"
+						>
+							<Button
+								variant="ghost"
+								size="icon"
+								class="h-7 w-7 rounded-full hover:bg-muted/80
+								text-foreground cursor-pointer transition-transform
+								active:scale-95"
+								title="Previous conflict"
+								onclick={hopToPrevConflict}
+							>
+							<HugeiconsIcon icon={ArrowUp01Icon} class="w-3.5 h-3.5" />
+							</Button>
+
+							<div class="flex flex-col items-center justify-center px-1 py-0.5 select-none pointer-events-none">
+								<span class="text-[10px] font-semibold text-[#DDA0DD] flex items-center gap-0.5">
+									<HugeiconsIcon icon={GitMergeConflictIcon} class="w-3 h-3" />
+									<span>{conflictIndices.length}</span>
+								</span>
+							</div>
+
+							<Button
+								variant="ghost"
+								size="icon"
+								class="h-7 w-7 rounded-full hover:bg-muted/80 text-foreground cursor-pointer transition-transform active:scale-95"
+								title="Next conflict"
+								onclick={hopToNextConflict}
+							>
+								<HugeiconsIcon icon={ArrowDown01Icon} class="w-3.5 h-3.5" />
+							</Button>
 					</div>
-				{/each}
+					{/if}
+
+				{/if}
 			{/if}
 		</div>
 
 		<DialogFooter
-			class="pt-4 max-sm:flex-col gap-6 shrink-0 z-10 bg-background/50"
+			class="pt-4 w-full md:gap-6 shrink-0 z-10"
 		>
-			<Button
-				variant="outline"
-				onclick={onclose}
-				disabled={isFetching || isSubmitting}
-				class="disabled:cursor-not-allowed cursor-pointer min-w-24 border-border/60 hover:bg-background/80 transition-colors"
-			>
-				{allDoneOrFatal ? "Close" : "Cancel"}
-			</Button>
-			<Button
-				onclick={downloadAll}
-				class="disabled:cursor-not-allowed cursor-pointer min-w-[140px] shadow-sm transition-all"
-				disabled={isFetching ||
-					isSubmitting ||
-					hasUnresolvedConflicts ||
-					allDoneOrFatal ||
-					items.length === 0}
-			>
-				{#if isSubmitting}
-					<HugeiconsIcon
-						icon={LoaderPinwheelIcon}
-						class="w-4 h-4 animate-spin mr-2"
-					/>
-					Adding...
-				{:else}
-					Done
-				{/if}
-			</Button>
+			<div class="w-full md:flex flex-row hidden items-center justify-between">
+				<div class="flex flex-row">
+					<div class="text-muted-foreground text-xs flex flex-row gap-1.5">
+						<HugeiconsIcon
+							icon={FileLinkIcon}
+							strokeWidth={2}
+							class="w-3.5 h-3.5 text-muted-foreground"
+						/>
+						URIs: {uris.length}
+					</div>
+					<div class="w-px h-5 mx-2 bg-border"></div>
+					<div class="text-muted-foreground text-xs flex flex-row gap-1.5">
+						<HugeiconsIcon
+							icon={GitMergeConflictIcon}
+							strokeWidth={2}
+							class="w-3.5 h-3.5 text-muted-foreground"
+						/>
+						Conflicts: {conflictCount}
+					</div>
+				</div>
+				<div class="space-x-4">
+					<Button
+						variant="outline"
+						onclick={onclose}
+						disabled={isFetching || isSubmitting}
+						class="disabled:cursor-not-allowed cursor-pointer min-w-24 border-border/60 hover:bg-background/80 transition-colors"
+					>
+						{allDoneOrFatal ? "Close" : "Cancel"}
+					</Button>
+					<Button
+						title={conflictCount > 0
+							? "Resolve all conflict first"
+							: "Add all in download queue"}
+						onclick={downloadAll}
+						class="disabled:cursor-not-allowed cursor-pointer min-w-[140px] shadow-sm transition-all"
+						disabled={isFetching ||
+							isSubmitting ||
+							hasUnresolvedConflicts ||
+							allDoneOrFatal ||
+							items.length === 0}
+					>
+						{#if isSubmitting}
+							<HugeiconsIcon
+								icon={LoaderPinwheelIcon}
+								class="w-4 h-4 animate-spin mr-1"
+							/>
+							Adding...
+						{:else}
+							Done
+						{/if}
+					</Button>
+				</div>
+			</div>
+
+
+			<div class="w-full flex flex-row justify-between md:hidden">
+				<Button
+					variant="outline"
+					onclick={onclose}
+					disabled={isFetching || isSubmitting}
+					class="disabled:cursor-not-allowed cursor-pointer min-w-24 border-border/60 hover:bg-background/80 transition-colors"
+				>
+					{allDoneOrFatal ? "Close" : "Cancel"}
+				</Button>
+				<Button
+					onclick={downloadAll}
+					class="disabled:cursor-not-allowed cursor-pointer min-w-[140px] shadow-sm transition-all"
+					disabled={isFetching ||
+						isSubmitting ||
+						hasUnresolvedConflicts ||
+						allDoneOrFatal ||
+						items.length === 0}
+				>
+					{#if isSubmitting}
+						<HugeiconsIcon
+							icon={LoaderPinwheelIcon}
+							class="w-4 h-4 animate-spin mr-1"
+						/>
+						Adding...
+					{:else}
+						Done
+					{/if}
+				</Button>
+			</div>
 		</DialogFooter>
 	</DialogContent>
 </Dialog>
@@ -1090,6 +1407,12 @@
 	.fade-right {
 		-webkit-mask-image: linear-gradient(to right, black 85%, transparent 100%);
 		mask-image: linear-gradient(to right, black 85%, transparent 100%);
+	}
+
+	@media (max-width: 767px) {
+		.keep-in-center {
+			justify-content: center !important;
+		}
 	}
 </style>
 

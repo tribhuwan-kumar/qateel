@@ -87,7 +87,7 @@ pub async fn reg_admin(
 }
 
 
-/// Create user
+/// Create non admin user
 pub async fn create_user(
     State(state): State<AppState>,
     auth: AuthenticatedUser,

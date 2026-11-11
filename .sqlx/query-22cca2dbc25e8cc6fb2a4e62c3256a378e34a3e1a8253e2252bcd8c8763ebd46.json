@@ -36,7 +36,7 @@
       {
         "name": "is_resume_supported",
         "ordinal": 6,
-        "type_info": "Bool"
+        "type_info": "Text"
       },
       {
         "name": "kind: Kind",

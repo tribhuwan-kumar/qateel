@@ -1,3 +1,5 @@
+import { type SortBy, type Order } from '$lib/sort';
+
 /** Sub structures for download info */
 export interface Aria2Uri {
   uri: string;
@@ -18,6 +20,16 @@ export type GidStatus =
   "stopped" |
 	"seeding" |
   "complete";
+
+export type Category =
+  "torrent" |
+  "music" |
+  "photos" |
+  "programs" |
+  "videos" |
+  "subtitles" |
+	"compressed" |
+  "others";
 
 export interface StatusCounts {
     all: number;
@@ -139,14 +151,11 @@ export interface Aria2Session {
 
 export interface PauseReq {
   gids?: string[];
-  pauseAll?: boolean;
   forcePause?: boolean;
-  forcePauseAll?: boolean;
 }
 
 export interface ResumeReq {
-  gid?: string[];
-  resumeAll?: boolean;
+  gids: string[];
 }
 
 export interface StopReq {
@@ -171,11 +180,21 @@ export interface SearchResponse {
   };
 }
 
+export interface HistoryQueryParams {
+	page?: number;
+	limit?: number;
+	sortBy?: SortBy;
+	order?: Order;
+	status?: string;    // `GidStatus` with "all"
+	category?: string;  // `Category` with "everything"
+}
+
 /** BOOM everthing is string */
 export interface ItemMetaData {
   gid: string;
   name: string | null;
   kind: Kind,
+	category: Category | null;
   status: GidStatus;
   dir: string | null;
   files: string | null;                                 /* json string */
@@ -184,46 +203,54 @@ export interface ItemMetaData {
   uploadLength: string | null;
   sourceUri: string | null;
   infoHash: string | null;
-  seeder: boolean | null;
+  seeder: string | null;														/* string bool */
   contentHash: string | null;
   errorCode: number | null;
   errorMessage: string | null;
   torrent: TorrentMagnetMeta | null;
 	options: Partial<Aria2Options> | null;
-  isResumeSupported: boolean | null;
-	connections: string | null;
+  isResumeSupported: string | null;									/* string bool */
 	numPieces: string | null;
-	numSeeder: string | null;
 	pieceLength: string | null;
 	verifiedLength: string | null;
-	verifyIntegrityPending: boolean | null;
+	verifyIntegrityPending: string | null;					/* string bool */
   createdAt: string | null;
   completedAt: string | null;
   /**
-		Merging these values manually
+		Merging these values manually, from tick ws
 	*/
   downloadSpeed?: string;
   uploadSpeed?: string;
+	numSeeders?: string | null;
+	connections?: string | null;
 }
 
 /** Instant data */
 export interface TickTask {
   gid: string;
   name: string | null;
-	kind: Kind,
-	status: GidStatus;
-	sourceUri: string;
-  dir: string;
-  connections: string;
-	num_seeders: string;
-	verifyIntegrityPending: boolean;
-	verifiedLength: string;
-  totalLength: string;
-  completedLength: string;
-  uploadLength: string;
-  downloadSpeed: string;
-  uploadSpeed: string;
+  kind: Kind;
+  status: GidStatus;
+	dir: string | null;
+  sourceUri: string | null;
+	isResumeSupported: string | null;				/* string bool   */
+	files: string | null;
+	uploadLength: string;
+	completedLength: string;
+	totalLength: string;
+	verifiedLength: string | null;
+  connections: string | null;
+	downloadSpeed: string;
+	uploadSpeed: string;
+  numSeeders: string | null;
+	seeder: string | null;									/* string bool   */
+  verifyIntegrityPending: string | null;	/* string bool   */
 }
+
+/// Coming over websocket
+export type DlWsMessage =
+  | { type: "tick"; tasks: TickTask[] }
+  | { type: "event"; data: ItemMetaData[] };
 
 /** History api response */
 export interface HistoryResponse {
@@ -247,10 +274,6 @@ export interface GlobalStat {
   uploadSpeed: string,
 }
 
-/// Coming over websocket
-export type DdlWsMessage =
-  | { type: "tick"; tasks: TickTask[] }
-  | { type: "event"; data: ItemMetaData };
 
 /// Global stat websocket
 export type GlobalStatWsMessage =
@@ -264,7 +287,7 @@ export interface AddUriTask {
   uri: string;
   name: string;
   totalLength: string;
-  isResumeSupported: boolean;
+  isResumeSupported: string;				/* string bool   */
   options?: Partial<Aria2Options>;
 }
 
@@ -284,7 +307,7 @@ export interface UriInfoRes {
   uri: string;
   name: string;
   totalLength: string;
-  isResumeSupported: boolean;
+  isResumeSupported: string;			/* string bool   */
   isMagnet: boolean;
   isFtp: boolean;
   isSftp: boolean;
@@ -577,5 +600,10 @@ export interface Aria2CmdOptions {
 // Req payload
 export interface ChangeCmdOptionReq {
   options: Aria2CmdOptions;
+}
+
+export interface SpeedRecord {
+  timestamp: number;
+  speed: number;
 }
 

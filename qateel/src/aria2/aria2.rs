@@ -24,6 +24,9 @@ use super::types::{
     Aria2JsonRpcResp,
 };
 
+const MPSC_CHANNEL: usize = 1024;
+const RPC_CALL_TIMEOUT: u64 = 1024;
+
 impl Aria2Client {
     pub fn new(
         url: String,
@@ -31,7 +34,7 @@ impl Aria2Client {
         status_tx: Arc<watch::Sender<SysStatus>>,
         resp_tx: broadcast::Sender<Aria2JsonRpcResp>,
     ) -> Self {
-        let (command_tx, command_rx) = mpsc::channel(32);
+        let (command_tx, command_rx) = mpsc::channel(MPSC_CHANNEL);
 
         let client = Self {
             command_tx,
@@ -57,12 +60,32 @@ impl Aria2Client {
                 reply: reply_tx,
             })
             .await
-            .map_err(|_| "Aria2 worker is dead".to_string())?;
+			.map_err(|_| {
+				let err = "Aria2 worker is dead.".to_string();
+				err
+			})?;
 
-        reply_rx.await.map_err(|_| "Response channel closed".to_string())?
+			match tokio::time::timeout(Duration::from_secs(RPC_CALL_TIMEOUT), reply_rx).await {
+				Ok(chnl_res) => match chnl_res {
+					Ok(rpc_res) => {
+						rpc_res
+					}
+					Err(_) => {
+						let err = format!("Aria2 RPC reply channel closed for method: {}", method);
+						error!("{:?}", err);
+						Err(err)
+					}
+				},
+				Err(_) => {
+					let err = format!("Aria2 RPC 100 sec timeout for method: {}", method);
+					error!("{}", err);
+					Err(err)
+				}
+			}
     }
 }
 
+/// Not going to implement an extra deprected auth method!!
 impl Aria2Worker {
     async fn run(
         url: String,

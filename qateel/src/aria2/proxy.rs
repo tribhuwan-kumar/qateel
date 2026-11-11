@@ -8,6 +8,7 @@ use std::path::Path;
 use sha1::{Digest, Sha1};
 use tokio::process::Command;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::collections::HashMap;
 use sqlx::{Sqlite, QueryBuilder};
 use tokio::time::{sleep, Duration};
@@ -20,6 +21,7 @@ use super::types::{
     MoveReq,
     StopReq,
 	UriMeta,
+	Category,
     PauseReq,
     RetryReq,
     GidStatus,
@@ -36,10 +38,10 @@ use super::types::{
     RemoveHisReq,
     SetOptionReq,
 	CheckNameReq,
-	ItemCategory,
-	ParsedTorrent,
 	TorsProbeReq,
 	TorsProbeRes,
+	ParsedTorrent,
+	PendingAddUri,
     PaginationQuery,
     SetCmdOptionsReq,
 	DuplicateConflict,
@@ -47,7 +49,6 @@ use super::types::{
     TorrentMagnetMeta,
     BatchAddTorrentReq,
     SetGlobalOptionReq,
-	DownloadRowForItemCount,
 };
 
 use tracing::{info, debug, error, warn};
@@ -63,6 +64,8 @@ use crate::{
     auth::types::User as AuthenticatedUser,
 };
 
+pub const MAX_MULTICALL_BATCH: usize = 20;
+
 /* All return json is in `camelCase`  */
 
 /// Add all most all types of URIs
@@ -71,32 +74,31 @@ pub async fn add_uris(
     user: AuthenticatedUser,
     Json(payload): Json<AddUriReq>,
 ) -> impl IntoResponse {
-    let mut calls: Vec<Value> = Vec::new();
-    let mut generated_gids: Vec<String> = Vec::new();
-    let mut call_indices: Vec<usize> = Vec::new();
+
     let mut results: Vec<Value> = Vec::new();
+	let mut queued_calls: Vec<(PendingAddUri, Value)> = Vec::new();
 
     for (i, task) in payload.tasks.into_iter().enumerate() {
         let mut opt = task.options.unwrap_or_default();
         let info_hash = Extraction::extract_mgn_info_hash(&task.uri);
         let is_magnet = info_hash.is_some();
 
-		let kind = match url::Url::parse(&task.uri) {
-			Ok(u) => match u.scheme().to_ascii_lowercase().as_str() {
-				"magnet" => Kind::Torrent,
-				"http" | "https" | "ftp" | "sftp" => Kind::Uri,
-				_ => Kind::Unknown,
-			},
-			Err(_) => Kind::Unknown,
-		};
+        let kind = match url::Url::parse(&task.uri) {
+            Ok(u) => match u.scheme().to_ascii_lowercase().as_str() {
+                "magnet" => Kind::Torrent,
+                "http" | "https" | "ftp" | "sftp" => Kind::Uri,
+                _ => Kind::Unknown,
+            },
+            Err(_) => Kind::Unknown,
+        };
 
-		if kind == Kind::Unknown {
-			results.push(serde_json::json!({
-				"index": i,
-				"error": "Unsupported or invalid URL format."
-			}));
-			continue;
-		}
+        if kind == Kind::Unknown {
+            results.push(serde_json::json!({
+                "index": i,
+                "error": "Unsupported or invalid URL format."
+            }));
+            continue;
+        }
 
         let gid = utils::generate_gid();
         opt.insert("gid".to_string(), serde_json::json!(gid));
@@ -106,128 +108,155 @@ pub async fn add_uris(
             opt.insert("out".to_string(), serde_json::json!(task.name.clone()));
         }
 
-        // Database insertion
-        if let Err(e) = sqlx::query!(
-            r#"
-                INSERT INTO download_history
-                (gid, user_id, kind, status, name, source_uri, total_length, is_resume_supported)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            "#,
-            gid,
-            user.user_id,
-            kind,
-            "waiting",
-            task.name,
-            task.uri,
-            task.total_length,
-            task.is_resume_supported
-        ).execute(&state.db).await {
-            error!("Failed to register record for GID {:?}: {:?}", gid, e);
-        }
+		let category = Category::determine(Some(task.name.as_str()), &kind.as_str());
+
+        // Store the values we'll need for the DB insertion later
+        let pending = PendingAddUri {
+            index: i,
+            kind: kind.clone(),
+			category: category,
+            name: task.name.clone(),
+            source_uri: task.uri.clone(),
+            total_length: task.total_length.clone(),
+            is_resume_supported: task.is_resume_supported.clone(),
+        };
 
         if is_magnet {
             let hash_str = info_hash.clone().unwrap();
-			let file_name = format!("{}-{}.torrent", user.user_id, hash_str);
-			let torrent_dir = state.config.data_dir.join("torrents");
-			let torrent_path = torrent_dir.join(&file_name);
+            let file_name = format!("{}-{}.torrent", user.user_id, hash_str);
+            let torrent_dir = state.config.data_dir.join("torrents");
+            let torrent_path = torrent_dir.join(&file_name);
+
             // Directly inject the .torrent file downloaded during `probe_uris_info`
             if torrent_path.exists() {
                 if let Ok(file_contents) = tokio::fs::read(&torrent_path).await {
                     let b64 = STANDARD.encode(&file_contents);
-                    calls.push(json!({
-                        "methodName": "aria2.addTorrent",
-                        "params": [
-							b64,
-							[],				                /* Webseeding URIs, keeping it empty till now */
-							opt
-						]
-                    }));
-
-                    call_indices.push(i);
-                    generated_gids.push(gid.clone());
-
+                    queued_calls.push((
+						pending,
+						serde_json::json!({
+							"methodName": "aria2.addTorrent",
+							"params": [
+								b64,
+								[],                                /* Webseeding URIs, keeping it empty till now */
+								opt
+							]
+						})));
                     continue;
                 }
             }
         }
 
-        calls.push(serde_json::json!({
-            "methodName": "aria2.addUri",
-            "params": [ [task.uri], opt ]
-        }));
-
-        call_indices.push(i);
-        generated_gids.push(gid.clone());
+        queued_calls.push((
+            pending,
+            serde_json::json!({
+                "methodName": "aria2.addUri",
+                "params": [[task.uri], opt]
+            }),
+        ));
     }
 
-    if calls.is_empty() {
+    if queued_calls.is_empty() {
         return (StatusCode::OK, Json(serde_json::json!({ "data": results })));
     }
 
-    // Execute multicall
-    match state.aria2.call("system.multicall", vec![serde_json::json!(calls)]).await {
-        Ok(gids_resp) => {
-            if let Some(arr) = gids_resp.as_array() {
-                for (arr_idx, res) in arr.iter().enumerate() {
-                    let original_index = call_indices[arr_idx];
-                    let expected_gid = &generated_gids[arr_idx];
+    let mut batch_error: Option<String> = None;
 
-                    if let Some(returned_gid) = res.as_array().and_then(|g| g.first()).and_then(|v| v.as_str()) {
-                        let state_clone = state.clone();
-                        let gid_clone = returned_gid.to_string();
+    for chunk in queued_calls.chunks(MAX_MULTICALL_BATCH) {
+        let rpc_batch = chunk
+            .iter()
+            .map(|(_, call)| call.clone())
+            .collect::<Vec<Value>>();
 
-                        tokio::spawn(async move {
-                            if let Ok(opts_val) = state_clone.aria2.call(
-                                    "aria2.getOption",
-                                    vec![serde_json::json!(gid_clone)]
-                                ).await {
-                                let opts_str = serde_json::to_string(&opts_val).unwrap_or_default();
-								let _ = sqlx::query!("
+	match state.aria2.call("system.multicall", vec![serde_json::json!(rpc_batch)]).await {
+		Ok(gids_resp) => {
+			if let Some(arr) = gids_resp.as_array() {
+				for (local_idx, res) in arr.iter().enumerate() {
+					let (pending, _) = &chunk[local_idx];
+					let original_index = pending.index;
+
+					if let Some(returned_gid) = res.as_array().and_then(|g| g.first()).and_then(|v| v.as_str()) {
+						if let Err(e) = sqlx::query!(
+							r#"
+								INSERT INTO download_history
+								(gid, user_id, kind, category, status, name, source_uri, total_length, is_resume_supported)
+								VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+							"#,
+							returned_gid,
+							user.user_id,
+							pending.kind,
+							pending.category,
+							"waiting",
+							pending.name,
+							pending.source_uri,
+							pending.total_length,
+							pending.is_resume_supported
+						).execute(&state.db).await {
+							error!("Failed to register record for GID {:?}: {:?}", returned_gid, e);
+						}
+
+						let state_clone = state.clone();
+						let gid_clone = returned_gid.to_string();
+
+						tokio::spawn(async move {
+							if let Ok(opts_val) = state_clone.aria2.call(
+								"aria2.getOption",
+								vec![serde_json::json!(gid_clone)],
+							).await {
+								let opts_str = serde_json::to_string(&opts_val).unwrap_or_default();
+								let _ = sqlx::query!(
+									"
 									UPDATE download_history
 									SET options = ?
 									WHERE gid = ?",
 									opts_str,
 									gid_clone
-                                ).execute(&state_clone.db).await;
-                            }
-                            HistoryService::refresh_gid(&state_clone, gid_clone).await;
-                        });
+								)
+								.execute(&state_clone.db)
+								.await;
+							}
 
-                        results.push(serde_json::json!({
-                            "index": original_index,
-                            "gid": returned_gid
-                        }));
-                    } else if let Some(err_obj) = res.as_object() {
-                        let borrow_j = &json!(0);
-                        let code_val = err_obj.get("code").unwrap_or(borrow_j);
-                        let code_val = code_val.as_i64().unwrap_or(0);
-                        let msg = err_obj.get("message").and_then(|v| v.as_str()).unwrap_or("Unknown error");
+							HistoryService::refresh_gid(&state_clone, gid_clone).await;
+						});
 
-                        let _ = sqlx::query!(
-                            "DELETE FROM download_history
-                            WHERE gid = ?",
-                            expected_gid
-                        ).execute(&state.db).await;
+						results.push(serde_json::json!({
+							"index": original_index,
+							"gid": returned_gid
+						}));
 
-                        results.push(serde_json::json!({
-                            "index": original_index,
-                            "code": code_val,
-                            "error": msg
-                        }));
-                    }
-                }
-            }
+					} else if let Some(err_obj) = res.as_object() {
+						// Error format: { "code": 1, "message": "something" }
+						let code_val = err_obj.get("code").and_then(|v| v.as_i64()).unwrap_or(0);
+						let msg = err_obj.get("message").and_then(|v| v.as_str()).unwrap_or("Unknown error");
 
-            results.sort_by_key(|v| v.get("index").and_then(|i| i.as_u64()).unwrap_or(0));
-            (StatusCode::OK, Json(serde_json::json!({ "data": results })))
-        },
-        Err(e) => {
-            for gid in generated_gids {
-                let _ = sqlx::query!("DELETE FROM download_history WHERE gid = ?", gid).execute(&state.db).await;
-            }
-            (StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": e.to_string() })))
-        }
+						results.push(serde_json::json!({
+							"index": original_index,
+							"code": code_val,
+							"error": msg
+						}));
+					}
+				}
+			}
+		}
+		Err(e) => {
+			batch_error = Some(e);
+			break;
+		}
+	}
     }
+
+    results.sort_by_key(|v| v.get("index").and_then(|i| i.as_u64()).unwrap_or(0));
+
+    if let Some(err) = batch_error {
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({
+                "error": err,
+                "data": results
+            })),
+        );
+    }
+
+    (StatusCode::OK, Json(serde_json::json!({ "data": results })))
 }
 
 
@@ -377,7 +406,7 @@ pub async fn probe_uris_info(
                 uri,
                 name: meta.name,
                 total_length: meta.total_length,
-                is_resume_supported: meta.resumable,
+                is_resume_supported: meta.resumable.to_string(),
                 is_magnet,
                 is_ftp,
                 is_sftp,
@@ -532,6 +561,7 @@ async fn find_duplicate(
 /// Check if a newly typed name conflicts with db or Disk
 pub async fn check_name_conflict(
     State(state): State<AppState>,
+    _user: AuthenticatedUser,
     Json(payload): Json<CheckNameReq>,
 ) -> impl IntoResponse {
     let name = payload.name.trim();
@@ -855,63 +885,21 @@ pub async fn probe_torrents(
 
 /// ref: https://aria2.github.io/manual/en/html/aria2c.html#aria2.pause
 /// aria2.pause
-/// aria2.pauseAll
 /// aria2.forcePause
-/// aria2.forcePauseAll
+// only `active` and `waiting` can be paused,
 pub async fn pause(
     State(state): State<AppState>,
+    _user: AuthenticatedUser,
     Json(payload): Json<PauseReq>,
 ) -> impl IntoResponse {
-    let is_force_all = payload.force_pause_all.unwrap_or(false);
-    let is_all = payload.pause_all.unwrap_or(false);
-
-    // `pauseAll` / `forcePauseAll` directly
-	// No multicall needed for a single global command
-    if is_force_all || is_all {
-        let method = if is_force_all {
-            "aria2.forcePauseAll"
-        } else {
-            "aria2.pauseAll"
-        };
-
-        return match state.aria2.call(method, vec![]).await {
-            Ok(_) => {
-                if let Some(ref gids) = payload.gids {
-                    for gid in gids {
-                        let state_clone = state.clone();
-                        let gid_clone = gid.clone();
-						// Mark to `resume` to `waiting`
-                        tokio::spawn(async move {
-                            HistoryService::handle_event(&state_clone, &gid_clone, Some("paused")).await;
-                        });
-                    }
-                }
-                info!("Successfully executed `{}`", method);
-                (
-                    StatusCode::OK,
-                    Json(json!({ "status": "paused", "method": method })),
-                )
-                    .into_response()
-            }
-            Err(e) => {
-                error!("`{}` failed: {}", method, &e);
-                (
-                    StatusCode::BAD_GATEWAY,
-                    Json(json!({ "error": format!("Method '{}' failed: {}", method, e.to_string()) })),
-                ).into_response()
-            }
-        };
-    }
-
     // Validate gids for the batch multicall
     let gids = match &payload.gids {
         Some(gids) if !gids.is_empty() => gids,
         _ => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "At least one GID or a pause_all flag is required" })),
-            )
-                .into_response();
+                Json(json!({ "error": "No GID provided to pause." })),
+            ).into_response();
         }
     };
 
@@ -921,266 +909,618 @@ pub async fn pause(
         "aria2.pause"
     };
 
-    // Build the multicall params
-    let calls: Vec<Value> = gids
-        .iter()
-        .map(|gid| {
-            json!({
-                "methodName": method,
-                "params": [gid]
+    let mut succeeded = Vec::new();
+    let mut failed = Vec::new();
+
+    for chunk in gids.chunks(MAX_MULTICALL_BATCH) {
+        let calls: Vec<Value> = chunk
+            .iter()
+            .map(|gid| {
+                json!({
+                    "methodName": method,
+                    "params": [gid]
+                })
             })
-        })
-        .collect();
+            .collect();
 
-    // Execute system.multicall
-    match state.aria2.call("system.multicall", vec![json!(calls)]).await {
-        Ok(multicall_resp) => {
-            let mut succeeded = Vec::new();
-            let mut failed = Vec::new();
+        match state.aria2.call("system.multicall", vec![json!(calls)]).await {
+            Ok(multicall_resp) => {
+                let arr = match multicall_resp.as_array() {
+                    Some(v) => v,
+                    None => {
+                        failed.extend(
+                            chunk.iter() .map(|gid| json!({ "gid": gid, "error": "Invalid aria2 multicall response." })),
+                        );
+                        continue;
+                    }
+                };
 
-            if let Some(arr) = multicall_resp.as_array() {
-                for (i, res) in arr.iter().enumerate() {
-                    let expected_gid = &gids[i];
+                for (idx, res) in arr.iter().enumerate() {
+                    let expected_gid = &chunk[idx];
 
-                    // Multicall returns successes as a nested array: [[ "gid1" ], [ "gid2" ]]
-                    if let Some(returned_gid) = res.as_array().and_then(|g| g.first()).and_then(|v| v.as_str()) {
+                    let returned_gid = if let Some(v) = res.as_str() {
+                        Some(v.to_string())
+                    } else if let Some(list) = res.as_array() {
+                        list.first()
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                    } else {
+                        None
+                    };
 
-                        let state_clone = state.clone();
-                        let gid_clone = returned_gid.to_string();
-
-                        // History update to avoid blocking response
-						// Mark to `resume` to `waiting`
-                        tokio::spawn(async move {
-                            HistoryService::handle_event(&state_clone, &gid_clone, Some("paused")).await;
-                        });
+                    if returned_gid.is_some() {
 
                         succeeded.push(expected_gid.clone());
-                    }
-                    // Errors are returned as: { "code": ..., "message": ... }
-                    else if let Some(err_obj) = res.as_object() {
-                        let borrow_j = &json!(0);
-                        let code = err_obj.get("code").unwrap_or(borrow_j);
-                        let msg = err_obj.get("message").and_then(|v| v.as_str()).unwrap_or("Unknown error");
+
+                    } else if let Some(err_obj) = res.as_object() {
+                        let code = err_obj
+                            .get("code")
+                            .cloned()
+                            .unwrap_or_else(|| json!(0));
+                        let msg = err_obj
+                            .get("message")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("Unknown error");
 
                         failed.push(json!({
                             "gid": expected_gid,
                             "code": code,
                             "error": msg
                         }));
-                    }
-                    else {
+                    } else {
                         failed.push(json!({
                             "gid": expected_gid,
-                            "error": "Aria2 returned invalid response format"
+                            "error": "Aria2 returned invalid response format."
                         }));
                     }
                 }
             }
+            Err(e) => {
+                error!("`system.multicall` failed for {:?}: {:?}", method, &e);
 
-            info!(
-                "Batch `{}` executed via multicall: {} succeeded, {} failed",
-                method,
-                succeeded.len(),
-                failed.len()
-            );
-
-            // Build response based on outcomes
-            if succeeded.is_empty() {
-                return (
-                    StatusCode::BAD_GATEWAY,
-                    Json(json!({
-                        "error": "Failed to pause specified downloads",
-                        "method": method,
-                        "failed": failed
-                    })),
-                ).into_response();
+                failed.extend(
+                    chunk
+                        .iter()
+                        .map(|gid| json!({ "gid": gid, "error": e.to_string() })),
+                );
             }
-
-            (
-                StatusCode::OK,
-                Json(json!({
-                    "status": "paused",
-                    "method": method,
-                    "succeeded": succeeded,
-                    "failed": failed
-                })),
-            ).into_response()
-        }
-        Err(e) => {
-            error!("`system.multicall` failed for {}: {}", method, &e);
-            (
-                StatusCode::BAD_GATEWAY,
-				Json(json!({ "error": format!("Method '{}' failed: {}", method, e.to_string()) })),
-            ).into_response()
         }
     }
+
+    info!("Batch `{}` executed via multicall: {:?} succeeded, {:?} failed", method, succeeded.len(), failed.len());
+
+    if succeeded.is_empty() {
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({
+                "error": "Failed to pause specified downloads.",
+                "method": method,
+                "failed": failed
+            })),
+        ).into_response();
+    }
+
+	// `waiting` doesn't emits the notification event on being paused, had to it handle manually
+	let succeeded_cln = succeeded.clone();
+	tokio::spawn(async move {
+		HistoryService::handle_event(&state, &succeeded_cln, Some(GidStatus::Paused)).await;
+	});
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "status": "paused",
+            "method": method,
+            "succeeded": succeeded,
+            "failed": failed
+        })),
+    ).into_response()
 }
 
+/// Ref: https://aria2.github.io/manual/en/html/aria2c.html#aria2.forcePause
+/// `aria2.forcePause`
+pub async fn pause_all(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+) -> impl IntoResponse {
+    // Collect gids from DB that are active,waiting
+    // Adjust the column name if your app uses a different field name.
+    let db_gids: HashSet<String> = sqlx::query_scalar!(
+        r#"
+        SELECT gid
+        FROM download_history
+        WHERE user_id = ?
+          AND status IN ('active', 'waiting')
+        "#,
+        user.user_id
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })
+    .into_iter()
+    .flatten()
+    .collect();
+
+    // Collect gids from aria2 live session
+    let mut live_gids: HashSet<String> = HashSet::new();
+
+    let aria2_active = state.aria2.call("aria2.tellActive", vec![]).await;
+	// Keep a large window for `tellWaiting`
+    let aria2_waiting = state.aria2.call("aria2.tellWaiting", vec![json!(0), json!(99999)]).await;
+
+    for response in [aria2_active, aria2_waiting] {
+        let items = match response {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+
+        let arr = match items.as_array() {
+            Some(v) => v,
+            None => continue,
+        };
+
+        for item in arr {
+            let gid = item
+                .get("gid")
+                .and_then(serde_json::Value::as_str)
+                .map(|s| s.to_string());
+
+			let is_not_paused = item
+				.get("status")
+				.and_then(serde_json::Value::as_str)
+				.map(|s| s != "paused")
+				.unwrap_or(false);
+
+            if let Some(gid) = gid {
+				if is_not_paused {
+					live_gids.insert(gid);
+				}
+            }
+        }
+    }
+
+    // Unique set: db + live aria2
+    let gids: Vec<String> = db_gids
+        .union(&live_gids)
+        .cloned()
+        .collect();
+
+    if gids.is_empty() {
+		return (
+			StatusCode::BAD_REQUEST,
+			Json(json!({ "error": "No active or waiting downloads to pause." })),
+		).into_response();
+    }
+
+
+    let mut paused_gids: Vec<String> = Vec::new();
+    let mut failed: Vec<serde_json::Value> = Vec::new();
+
+    // Batch via `system.multicall`
+    for chunk in gids.chunks(MAX_MULTICALL_BATCH) {
+        let calls: Vec<serde_json::Value> = chunk
+            .iter()
+            .map(|gid| {
+                serde_json::json!({
+                    "methodName": "aria2.forcePause",
+                    "params": [gid]
+                })
+            })
+            .collect();
+
+        match state.aria2.call("system.multicall", vec![serde_json::json!(calls)]).await {
+            Ok(multicall_resp) => {
+                let results = match multicall_resp.as_array() {
+                    Some(v) => v,
+                    None => {
+                        for gid in chunk {
+                            failed.push(serde_json::json!({
+                                "gid": gid,
+                                "error": "Invalid aria2 multicall response."
+                            }));
+                        }
+                        continue;
+                    }
+                };
+
+                for (idx, res) in results.iter().enumerate() {
+                    let gid = match chunk.get(idx) {
+                        Some(gid) => gid,
+                        None => continue,
+                    };
+
+                    let success = res
+                        .as_array()
+                        .and_then(|v| v.first())
+                        .and_then(serde_json::Value::as_str)
+                        .is_some()
+                        || res.as_str().is_some();
+
+                    if success {
+
+                        paused_gids.push(gid.clone());
+
+                    } else if let Some(err_obj) = res.as_object() {
+                        let code = err_obj
+                            .get("code")
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!(0));
+                        let msg = err_obj
+                            .get("message")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("Unknown error");
+
+                        failed.push(serde_json::json!({
+                            "gid": gid,
+                            "code": code,
+                            "error": msg
+                        }));
+                    } else {
+                        failed.push(serde_json::json!({
+                            "gid": gid,
+                            "error": "Aria2 returned invalid response format."
+                        }));
+                    }
+                }
+            }
+            Err(e) => {
+                for gid in chunk {
+					error!("Pasuing failed for gid: {:?}, error: {}", gid, e);
+                    failed.push(serde_json::json!({
+                        "gid": gid,
+                        "error": e.to_string()
+                    }));
+                }
+            }
+        }
+    }
+
+    if paused_gids.is_empty() {
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({
+                "error": "Failed to pause all downloads.",
+                "failed": failed
+            })),
+        ).into_response();
+    }
+
+    // Emit pause events only for successful gids
+	let paused_cln = paused_gids.clone();
+	tokio::spawn(async move {
+		sleep(Duration::from_millis(250)).await;
+		HistoryService::handle_event(&state, &paused_cln, Some(GidStatus::Paused)).await;
+	});
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "status": "pausedAll",
+            "succeeded": paused_gids,
+            "failed": failed
+        })),
+    ).into_response()
+
+}
 
 /// Ref: https://aria2.github.io/manual/en/html/aria2c.html#aria2.unpause
 /// `aria2.unpause`
-/// `aria2.unpauseAll`
-/// Paused to waiting
+/// `paused` to `waiting`
 pub async fn resume(
     State(state): State<AppState>,
+    _user: AuthenticatedUser,
     Json(payload): Json<ResumeReq>,
 ) -> impl IntoResponse {
-    let is_all = payload.resume_all.unwrap_or(false);
-
-    // Handle `unpauseAll` directly
-    if is_all {
-        let method = "aria2.unpauseAll";
-
-        return match state.aria2.call(method, vec![]).await {
-            Ok(_) => {
-                if let Some(ref gids) = payload.gids {
-                    for gid in gids {
-                        let state_clone = state.clone();
-                        let gid_clone = gid.clone();
-						// Mark to `resume` to `waiting`
-                        tokio::spawn(async move {
-                            HistoryService::handle_event(&state_clone, &gid_clone, Some("waiting")).await;
-                        });
-                    }
-                }
-                info!("Successfully executed `{}`", method);
-                (
-                    StatusCode::OK,
-                    Json(json!({ "status": "resumed", "method": method })),
-                ).into_response()
-            }
-            Err(e) => {
-                error!("`{}` failed: {}", method, e);
-                (
-                    StatusCode::BAD_GATEWAY,
-                    Json(json!({ "error": format!("Method '{}' failed: {}", method, e.to_string()) })),
-                ).into_response()
-            }
-        };
-    }
-
     // Validate GIDs for the batch multicall
     let gids = match &payload.gids {
         Some(gids) if !gids.is_empty() => gids,
         _ => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "At least one GID or a `resume_all` flag is required." })),
+                Json(json!({ "error": "No GID provided to resume." })),
             ).into_response();
         }
     };
 
     let method = "aria2.unpause";
+    let mut succeeded = Vec::new();
+    let mut failed = Vec::new();
 
-    // Build the multicall params
-    let calls: Vec<Value> = gids
-        .iter()
-        .map(|gid| {
-            json!({
-                "methodName": method,
-                "params": [gid]
+    for chunk in gids.chunks(MAX_MULTICALL_BATCH) {
+		// Build the multicall params
+        let calls: Vec<Value> = chunk
+            .iter()
+            .map(|gid| {
+                json!({
+                    "methodName": method,
+                    "params": [gid]
+                })
             })
-        })
-        .collect();
+            .collect();
 
-    // Execute system.multicall
-    match state.aria2.call("system.multicall", vec![json!(calls)]).await {
-        Ok(multicall_resp) => {
-            let mut succeeded = Vec::new();
-            let mut failed = Vec::new();
+        match state.aria2.call("system.multicall", vec![json!(calls)]).await {
+            Ok(multicall_resp) => {
+                if let Some(arr) = multicall_resp.as_array() {
+                    for (i, res) in arr.iter().enumerate() {
+                        let expected_gid = match chunk.get(i) {
+                            Some(gid) => gid,
+                            None => continue,
+                        };
 
-            if let Some(arr) = multicall_resp.as_array() {
-                for (i, res) in arr.iter().enumerate() {
-                    let expected_gid = &gids[i];
+                        // Success format can be ["gid"]
+                        let returned_gid = res
+                            .as_array()
+                            .and_then(|g| g.first())
+                            .and_then(|v| v.as_str());
 
-                    // Success res from aria2 multicall format: [[ "gid1" ]]
-                    if let Some(returned_gid) = res.as_array().and_then(|g| g.first()).and_then(|v| v.as_str()) {
-                        let state_clone = state.clone();
-                        let gid_clone = returned_gid.to_string();
+                        if returned_gid.is_some() {
 
-                        // History status update to 'waiting'
-						// Mark to `resume` to `waiting`
-                        tokio::spawn(async move {
-                            HistoryService::handle_event(&state_clone, &gid_clone, Some("waiting")).await;
-                        });
+                            succeeded.push(expected_gid.clone());
 
-                        succeeded.push(expected_gid.clone());
+                        } else if let Some(err_obj) = res.as_object() {
+                            let code = err_obj.get("code").cloned().unwrap_or_else(|| json!(0));
+                            let msg = err_obj
+                                .get("message")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("Unknown error.");
+
+                            failed.push(json!({
+                                "gid": expected_gid,
+                                "code": code,
+                                "error": msg
+                            }));
+                        } else {
+                            failed.push(json!({
+                                "gid": expected_gid,
+                                "error": "Aria2 returned invalid response format."
+                            }));
+                        }
                     }
-                    // Error response format: { "code": ..., "message": ... }
-                    else if let Some(err_obj) = res.as_object() {
-                        let borrow_j = &json!(0);
-                        let code = err_obj.get("code").unwrap_or(borrow_j);
-                        let msg = err_obj.get("message").and_then(|v| v.as_str()).unwrap_or("Unknown error");
-
+                } else {
+                    // Entire chunk failed due to invalid response shape
+                    for gid in chunk {
                         failed.push(json!({
-                            "gid": expected_gid,
-                            "code": code,
-                            "error": msg
-                        }));
-                    }
-                    else {
-                        failed.push(json!({
-                            "gid": expected_gid,
-                            "error": "Aria2 returned invalid response format"
+                            "gid": gid,
+                            "error": "Aria2 returned invalid multicall response."
                         }));
                     }
                 }
             }
-
-            info!(
-                "Batch `{}` executed via multicall: {} succeeded, {} failed",
-                method,
-                succeeded.len(),
-                failed.len()
-            );
-
-            //Build response based on outcomes
-            if succeeded.is_empty() {
-                return (
-                    StatusCode::BAD_GATEWAY,
-                    Json(json!({
-                        "error": "Failed to resume specified downloads.",
-                        "method": method,
-                        "failed": failed
-                    })),
-                ).into_response();
+            Err(e) => {
+                error!("`system.multicall` failed for {:?}: {:?}", method, e);
+                // Mark every gid in this chunk as failed
+                for gid in chunk {
+                    failed.push(json!({
+                        "gid": gid,
+                        "error": e.to_string()
+                    }));
+                }
             }
-
-            (
-                StatusCode::OK,
-                Json(json!({
-                    "status": "resumed",
-                    "method": method,
-                    "succeeded": succeeded,
-                    "failed": failed
-                })),
-            ).into_response()
-        }
-        Err(e) => {
-            error!("`system.multicall` failed for {}: {}", method, e);
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({ "error": format!("Method '{}' failed: {}.", method, e.to_string()) })),
-            ).into_response()
         }
     }
+
+    info!("Batch {:?} executed via multicall: {:?} succeeded, {:?} failed", method, succeeded.len(), failed.len());
+
+    if succeeded.is_empty() {
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({
+                "error": "Failed to resume specified downloads.",
+                "method": method,
+                "failed": failed
+            })),
+        ).into_response();
+    }
+
+	// History status update of 'resume' -> 'waiting'
+	let succeeded_cln = succeeded.clone();
+	tokio::spawn(async move {
+		HistoryService::handle_event(&state, &succeeded_cln, Some(GidStatus::Waiting)).await;
+	});
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "status": "resumed",
+            "method": method,
+            "succeeded": succeeded,
+            "failed": failed
+        })),
+    ).into_response()
+}
+
+/// Ref: https://aria2.github.io/manual/en/html/aria2c.html#aria2.forcePause
+/// `aria2.unpause`
+/// Only `paused` can be resumed
+pub async fn resume_all(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+) -> impl IntoResponse {
+    // Collect gids from DB that are active,waiting
+    // Adjust the column name if your app uses a different field name.
+    let db_gids: HashSet<String> = sqlx::query_scalar!(
+        r#"
+        SELECT gid
+        FROM download_history
+        WHERE user_id = ?
+          AND status IN ('paused')
+        "#,
+        user.user_id
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })
+    .into_iter()
+    .flatten()
+    .collect();
+
+    let mut live_gids: HashSet<String> = HashSet::new();
+	// `tellWaiting` returns `paused` gids too
+    let aria2_waiting = state.aria2.call("aria2.tellWaiting", vec![json!(0), json!(99999)]).await;
+
+	if let Ok(items) = aria2_waiting {
+		if let Some(arr) = items.as_array() {
+			for item in arr {
+				let gid = item
+					.get("gid")
+					.and_then(serde_json::Value::as_str)
+					.map(|s| s.to_string());
+
+				let is_paused = item
+					.get("status")
+					.and_then(serde_json::Value::as_str)
+					.map(|s| s == "paused")
+					.unwrap_or(false);
+
+				if let Some(gid) = gid {
+					if is_paused {
+						live_gids.insert(gid);
+					}
+				}
+			}
+		}
+	}
+
+    // Unique set: db + live aria2
+    let gids: Vec<String> = db_gids
+        .union(&live_gids)
+        .cloned()
+        .collect();
+
+    if gids.is_empty() {
+		return (
+			StatusCode::BAD_REQUEST,
+			Json(json!({ "error": "No paused downloads to resume." })),
+		).into_response();
+    }
+
+
+    let mut resumed_gids: Vec<String> = Vec::new();
+    let mut failed: Vec<serde_json::Value> = Vec::new();
+
+    // Batch via `system.multicall`
+    for chunk in gids.chunks(MAX_MULTICALL_BATCH) {
+        let calls: Vec<serde_json::Value> = chunk
+            .iter()
+            .map(|gid| {
+                serde_json::json!({
+                    "methodName": "aria2.unpause",
+                    "params": [gid]
+                })
+            })
+            .collect();
+
+        match state.aria2.call("system.multicall", vec![serde_json::json!(calls)]).await {
+            Ok(multicall_resp) => {
+                let results = match multicall_resp.as_array() {
+                    Some(v) => v,
+                    None => {
+                        for gid in chunk {
+                            failed.push(serde_json::json!({
+                                "gid": gid,
+                                "error": "Invalid aria2 multicall response."
+                            }));
+                        }
+                        continue;
+                    }
+                };
+
+                for (idx, res) in results.iter().enumerate() {
+                    let gid = match chunk.get(idx) {
+                        Some(gid) => gid,
+                        None => continue,
+                    };
+
+                    let success = res
+                        .as_array()
+                        .and_then(|v| v.first())
+                        .and_then(serde_json::Value::as_str)
+                        .is_some()
+                        || res.as_str().is_some();
+
+                    if success {
+
+                        resumed_gids.push(gid.clone());
+
+                    } else if let Some(err_obj) = res.as_object() {
+                        let code = err_obj
+                            .get("code")
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!(0));
+                        let msg = err_obj
+                            .get("message")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("Unknown error");
+
+                        failed.push(serde_json::json!({
+                            "gid": gid,
+                            "code": code,
+                            "error": msg
+                        }));
+                    } else {
+                        failed.push(serde_json::json!({
+                            "gid": gid,
+                            "error": "Aria2 returned invalid response format."
+                        }));
+                    }
+                }
+            }
+            Err(e) => {
+                for gid in chunk {
+                    failed.push(serde_json::json!({
+                        "gid": gid,
+                        "error": e.to_string()
+                    }));
+                }
+            }
+        }
+    }
+
+	let resumed_gids_cln = resumed_gids.clone();
+	tokio::spawn(async move {
+		// Mark as waiting
+		HistoryService::handle_event(&state, &resumed_gids_cln, Some(GidStatus::Waiting)).await;
+	});
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "status": "resumedAll",
+            "succeeded": resumed_gids,
+            "failed": failed
+        })),
+    ).into_response()
+
 }
 
 
+
 /// Ref: https://aria2.github.io/manual/en/html/aria2c.html#aria2.remove
-/// It'll remove the ddl from the queue & free the memory
+/// It'll remove the dl from the queue & free the memory by calling `aria2.removeDownloadResult`
 /// Remove only from downloading queue, but don't delete the `file-allocation`
+/// `aria2.remove`
+/// `aria2.forceRemove`
 pub async fn stop(
     State(state): State<AppState>,
+    _user: AuthenticatedUser,
     Json(payload): Json<StopReq>,
 ) -> impl IntoResponse {
-    // Validate GIDs
     let gids = match &payload.gids {
         Some(gids) if !gids.is_empty() => gids,
         _ => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "At least one GID." })),
+                Json(json!({ "error": "No GID provided to resume." })),
             ).into_response();
         }
     };
@@ -1191,54 +1531,65 @@ pub async fn stop(
         "aria2.remove"
     };
 
-    // Build system.multicall params
-    let calls: Vec<Value> = gids
-        .iter()
-        .map(|gid| {
-            json!({
-                "methodName": method,
-                "params": [gid]
+    let mut successful_gids = Vec::new();
+    let mut failed = Vec::new();
+
+    // `remove, forceRemove` in chunks
+    for chunk in gids.chunks(MAX_MULTICALL_BATCH) {
+        let calls: Vec<Value> = chunk
+            .iter()
+            .map(|gid| {
+                json!({
+                    "methodName": method,
+                    "params": [gid]
+                })
             })
-        })
-        .collect();
+            .collect();
 
-    // Execute system.multicall
-    match state.aria2.call("system.multicall", vec![json!(calls)]).await {
-        Ok(multicall_resp) => {
-            let mut succeeded = Vec::new();
-            let mut failed = Vec::new();
-
-            if let Some(arr) = multicall_resp.as_array() {
-                for (i, res) in arr.iter().enumerate() {
-                    let expected_gid = &gids[i];
-					println!("STOP ARR: {:?}", res);
-                    // Success response format: [[ "gid1" ]]
-                    if let Some(returned_gid) = res.as_array().and_then(|g| g.first()).and_then(|v| v.as_str()) {
-                        let state_clone = state.clone();
-                        let gid_clone = returned_gid.to_string();
-
-                        // Remove download result from aria2 memory & update history DB
-                        tokio::spawn(async move {
-                            let _ = state_clone.aria2.call("aria2.removeDownloadResult", vec![json!(gid_clone)]).await;
-							sleep(Duration::from_millis(250)).await;
-                            HistoryService::handle_event(&state_clone, &gid_clone, Some("stopped")).await;
-                        });
-
-                        succeeded.push(expected_gid.clone());
+        match state.aria2.call("system.multicall", vec![json!(calls)]).await {
+            Ok(multicall_resp) => {
+                let arr = match multicall_resp.as_array() {
+                    Some(v) => v,
+                    None => {
+                        for gid in chunk {
+                            failed.push(json!({
+                                "gid": gid,
+                                "error": "Aria2 returned invalid multicall response."
+                            }));
+                        }
+                        continue;
                     }
-                    // Error res format: { "code": ..., "message": ... }
-                    else if let Some(err_obj) = res.as_object() {
-                        let borrow_j = &json!(0);
-                        let code = err_obj.get("code").unwrap_or(borrow_j);
-                        let msg = err_obj.get("message").and_then(|v| v.as_str()).unwrap_or("Unknown error");
+                };
+
+                for (idx, res) in arr.iter().enumerate() {
+                    let expected_gid = match chunk.get(idx) {
+                        Some(gid) => gid,
+                        None => continue,
+                    };
+
+                    let removed_gid = res
+                        .as_array()
+                        .and_then(|g| g.first())
+                        .and_then(|v| v.as_str())
+                        .or_else(|| res.as_str());
+
+                    if removed_gid.is_some() {
+
+                        successful_gids.push(expected_gid.clone());
+
+                    } else if let Some(err_obj) = res.as_object() {
+                        let code = err_obj.get("code").cloned().unwrap_or_else(|| json!(0));
+                        let msg = err_obj
+                            .get("message")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("Unknown error");
 
                         failed.push(json!({
                             "gid": expected_gid,
                             "code": code,
                             "error": msg
                         }));
-                    }
-                    else {
+                    } else {
                         failed.push(json!({
                             "gid": expected_gid,
                             "error": "Aria2 returned invalid response format"
@@ -1246,50 +1597,258 @@ pub async fn stop(
                     }
                 }
             }
-
-            info!(
-                "Stop `{}` execution via multicall: {} succeeded, {} failed",
-                method,
-                succeeded.len(),
-                failed.len()
-            );
-
-            // Build res based on outcomes
-            if succeeded.is_empty() {
-                return (
-                    StatusCode::BAD_GATEWAY,
-                    Json(json!({
-                        "error": "Failed to stop specified downloads.",
-                        "method": method,
-                        "failed": failed
-                    })),
-                ).into_response();
+            Err(e) => {
+                error!("Stopping failed for {} chunk: {}", method, e);
+                for gid in chunk {
+                    failed.push(json!({
+                        "gid": gid,
+                        "error": e.to_string()
+                    }));
+                }
             }
-
-            (
-                StatusCode::OK,
-                Json(json!({
-                    "status": "stopped",
-                    "method": method,
-                    "succeeded": succeeded,
-                    "failed": failed
-                })),
-            ).into_response()
-        }
-        Err(e) => {
-            error!("Stopping failed for {}: {}", method, e);
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({ "error": format!("Method '{}' failed: {}", method, e.to_string()) })),
-            ).into_response()
         }
     }
+
+    if successful_gids.is_empty() {
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({
+                "error": "Failed to stop specified downloads.",
+                "method": method,
+                "failed": failed
+            })),
+        ).into_response();
+    }
+
+    // `aria2.removeDownloadResult` ONLY for successful GIDs, but ignore result
+    for chunk in successful_gids.chunks(MAX_MULTICALL_BATCH) {
+        let cleanup_calls: Vec<Value> = chunk
+            .iter()
+            .map(|gid| {
+                json!({
+                    "methodName": "aria2.removeDownloadResult",
+                    "params": [gid]
+                })
+            })
+            .collect();
+
+        let _ = state
+            .aria2
+            .call("system.multicall", vec![json!(cleanup_calls)])
+            .await;
+    }
+
+    // History update only for successful from `remove` or `forceRemove`
+	let stopped_cln = successful_gids.clone();
+	tokio::spawn(async move {
+		HistoryService::handle_event(&state, &stopped_cln, Some(GidStatus::Stopped)).await;
+	});
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "status": "stopped",
+            "method": method,
+            "succeeded": successful_gids,
+            "failed": failed
+        })),
+    ).into_response()
+}
+
+/// Stop all `error`, `active`, `waiting`, `paused`. remove from aria2 dl queue
+/// `aria2.forceRemove`
+pub async fn stop_all(
+    State(state): State<AppState>,
+	user: AuthenticatedUser,
+) -> impl IntoResponse {
+    // Collect gids from DB that are active,waiting
+    // Adjust the column name if your app uses a different field name.
+    let db_gids: HashSet<String> = sqlx::query_scalar!(
+        r#"
+        SELECT gid
+        FROM download_history
+        WHERE user_id = ?
+          AND status IN ('active', 'paused', 'error', 'waiting')
+        "#,
+        user.user_id
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })
+    .into_iter()
+    .flatten()
+    .collect();
+
+    let mut live_gids: HashSet<String> = HashSet::new();
+
+    let aria2_active = state.aria2.call("aria2.tellActive", vec![]).await;
+    let aria2_waiting = state.aria2.call("aria2.tellWaiting", vec![json!(0), json!(99999)]).await;
+    let aria2_stopped = state.aria2.call("aria2.tellStopped", vec![json!(0), json!(99999)]).await;
+
+    for response in [aria2_active, aria2_waiting, aria2_stopped] {
+        let items = match response {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+
+        let arr = match items.as_array() {
+            Some(v) => v,
+            None => continue,
+        };
+
+        for item in arr {
+            let gid = item
+                .get("gid")
+                .and_then(serde_json::Value::as_str)
+                .map(|s| s.to_string());
+
+            if let Some(gid) = gid {
+				live_gids.insert(gid);
+            }
+        }
+    }
+
+    let gids: Vec<String> = db_gids
+        .union(&live_gids)
+        .cloned()
+        .collect();
+
+    if gids.is_empty() {
+		return (
+			StatusCode::BAD_REQUEST,
+			Json(json!({ "error": "No active, paused, waiting, error downloads to stop." })),
+		).into_response();
+    }
+
+	let mut failed = Vec::new();
+    let mut successful_gids = Vec::new();
+
+    // `remove, forceRemove` in chunks
+    for chunk in gids.chunks(MAX_MULTICALL_BATCH) {
+        let calls: Vec<Value> = chunk
+            .iter()
+            .map(|gid| {
+                json!({
+                    "methodName": "aria2.forceRemove",
+                    "params": [gid]
+                })
+            })
+            .collect();
+
+        match state.aria2.call("system.multicall", vec![json!(calls)]).await {
+            Ok(multicall_resp) => {
+                let arr = match multicall_resp.as_array() {
+                    Some(v) => v,
+                    None => {
+                        for gid in chunk {
+                            failed.push(json!({
+                                "gid": gid,
+                                "error": "Aria2 returned invalid multicall response."
+                            }));
+                        }
+                        continue;
+                    }
+                };
+
+                for (idx, res) in arr.iter().enumerate() {
+                    let expected_gid = match chunk.get(idx) {
+                        Some(gid) => gid,
+                        None => continue,
+                    };
+
+                    let removed_gid = res
+                        .as_array()
+                        .and_then(|g| g.first())
+                        .and_then(|v| v.as_str())
+                        .or_else(|| res.as_str());
+
+                    if removed_gid.is_some() {
+
+                        successful_gids.push(expected_gid.clone());
+
+                    } else if let Some(err_obj) = res.as_object() {
+                        let code = err_obj.get("code").cloned().unwrap_or_else(|| json!(0));
+                        let msg = err_obj
+                            .get("message")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("Unknown error");
+
+                        failed.push(json!({
+                            "gid": expected_gid,
+                            "code": code,
+                            "error": msg
+                        }));
+                    } else {
+                        failed.push(json!({
+                            "gid": expected_gid,
+                            "error": "Aria2 returned invalid response format."
+                        }));
+                    }
+                }
+            }
+            Err(e) => {
+                for gid in chunk {
+					error!("Stopping failed for gid: {:?}, error: {:?}", gid, e);
+                    failed.push(json!({
+                        "gid": gid,
+                        "error": e.to_string()
+                    }));
+                }
+            }
+        }
+    }
+
+    if successful_gids.is_empty() {
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({
+                "error": "Failed to stop all downloads.",
+                "failed": failed
+            })),
+        ).into_response();
+    }
+
+    // `aria2.removeDownloadResult` ONLY for successful GIDs, but ignore result
+    for chunk in successful_gids.chunks(MAX_MULTICALL_BATCH) {
+        let cleanup_calls: Vec<Value> = chunk
+            .iter()
+            .map(|gid| {
+                json!({
+                    "methodName": "aria2.removeDownloadResult",
+                    "params": [gid]
+                })
+            })
+            .collect();
+
+        let _ = state.aria2.call("system.multicall", vec![json!(cleanup_calls)]).await;
+    }
+
+    // History update only for successful from `remove` or `forceRemove`
+	let stopped_cln = successful_gids.clone();
+	tokio::spawn(async move {
+		HistoryService::handle_event(&state, &stopped_cln, Some(GidStatus::Stopped)).await;
+	});
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "status": "stoppedAll",
+            "succeeded": successful_gids,
+            "failed": failed
+        })),
+    ).into_response()
 }
 
 
 /// Get details for a gid
 pub async fn details(
     State(state): State<AppState>,
+    _user: AuthenticatedUser,
     Json(payload): Json<GidReq>,
 ) -> impl IntoResponse {
     let gid = payload.gid.clone();
@@ -1300,6 +1859,7 @@ pub async fn details(
 				gid,
 				name,
 				kind as "kind: Kind",
+				category as "category: Category",
 				status as "status: GidStatus",
 				dir,
 				files,
@@ -1312,12 +1872,10 @@ pub async fn details(
 				content_hash,
 				error_code,
 				error_message,
-				torrent as "torrent: sqlx::types::Json<TorrentMagnetMeta>",
+				torrent,
 				options,
 				is_resume_supported,
-				connections,
 				num_pieces,
-				num_seeders,
 				piece_length,
 				verified_length,
 				verify_integrity_pending,
@@ -1428,6 +1986,7 @@ pub async fn details(
 /// `check-integrity=true` for torrents and magnets
 pub async fn retry(
     State(state): State<AppState>,
+    _user: AuthenticatedUser,
     Json(payload): Json<RetryReq>,
 ) -> impl IntoResponse {
     let gid = payload.gid.clone();
@@ -1470,7 +2029,6 @@ pub async fn retry(
             StatusCode::CONFLICT,
             Json(json!({
                 "error": "Only GID with 'stopped', 'removed' and 'error' status can be retried",
-                "message": format!("GID {:?} status is {:?}", gid, rec.status)
             })),
         ).into_response();
     }
@@ -1490,7 +2048,12 @@ pub async fn retry(
         || rec.torrent.is_some()
         || rec.info_hash.is_some();
 
-    let should_resume = rec.is_resume_supported.unwrap_or(false);
+	// Bools are text in db
+	let should_resume = rec
+		.is_resume_supported
+		.as_ref()
+		.map(|s| s.eq_ignore_ascii_case("true"))
+		.unwrap_or(false);
 
 	// clear from aria2 memory
     if !should_resume {
@@ -1550,6 +2113,7 @@ pub async fn retry(
 /// Ref: https://aria2.github.io/manual/en/html/aria2c.html#aria2.getOption
 pub async fn get_option(
     State(state): State<AppState>,
+    _user: AuthenticatedUser,
     Json(payload): Json<GidReq>,
 ) -> impl IntoResponse {
     let row = match sqlx::query!(
@@ -1608,6 +2172,7 @@ impl Aria2Options {
 /// Ref: https://aria2.github.io/manual/en/html/aria2c.html#aria2.changeOption
 pub async fn set_option(
     State(state): State<AppState>,
+    _user: AuthenticatedUser,
     Json(payload): Json<SetOptionReq>,
 ) -> impl IntoResponse {
     let params = vec![
@@ -1658,6 +2223,7 @@ pub async fn set_option(
 /// This returns whole options
 pub async fn get_global_option(
     State(state): State<AppState>,
+    _user: AuthenticatedUser,
 ) -> impl IntoResponse {
     match state.aria2.call("aria2.getGlobalOption", vec![]).await {
         Ok(options) => (StatusCode::OK,  Json(serde_json::json!({ "data": options }))),
@@ -1689,6 +2255,17 @@ pub async fn set_global_option(
             .flatten()
             .map(|r| r.value)
             .unwrap_or_else(|| "{}".to_string());
+
+			let restricted = [
+				"dir",
+				"daemon",
+				"rpc-user",
+				"rpc-passwd",
+				"rpc-secret",
+				"enable-rpc",
+				"rpc-listen-port",
+				"rpc-save-upload-metadata",
+			];
 
             let mut current_opt: Aria2Options = serde_json::from_str(&existing)
                 .unwrap_or(Aria2Options(serde_json::Map::new()));
@@ -2303,8 +2880,9 @@ fn parse_aria2c_version_stdout(stdout: &str) -> Value {
 impl SortBy {
     pub fn to_sql_column(&self) -> &'static str {
         match self {
-            SortBy::Size => "total_length",
-            SortBy::Name => "name",
+			// Cast as int for alphabetical sorting
+            SortBy::Size => "CAST(total_length AS INTEGER)",
+            SortBy::Name => "name COLLATE NOCASE",
             SortBy::Time => "created_at",
         }
     }
@@ -2319,9 +2897,33 @@ impl Order {
     }
 }
 
-/// Get ddl history based on query
+fn his_fltr(
+	query: &mut QueryBuilder<Sqlite>,
+	status: Option<&str>,
+	category: Option<&str>,
+) {
+	if let Some(s) = status {
+		let trimmed = s.trim().to_lowercase();
+		// Ignore "all" or empty string -> fetch all statuses
+		if !trimmed.is_empty() && trimmed != "all" {
+			query.push(" AND status = ");
+			query.push_bind(trimmed);
+		}
+	}
+
+	if let Some(c) = category {
+		let trimmed = c.trim().to_lowercase();
+		// Ignore "everything", "all" or empty string -> fetch all categories
+		if !trimmed.is_empty() && trimmed != "everything" && trimmed != "all" {
+			query.push(" AND category = ");
+			query.push_bind(trimmed);
+		}
+	}
+}
+
+/// Get dl history based on query
 /// Query should also include the status criteria
-pub async fn get_history(
+pub async fn get_his(
     State(state): State<AppState>,
     user: AuthenticatedUser,
     Query(params): Query<PaginationQuery>,
@@ -2331,24 +2933,38 @@ pub async fn get_history(
     let offset = (page - 1) * limit;
 
 	// Resolve column name direction from enums
-    let order_column = params
-        .sort_by
-        .map(|s| s.to_sql_column())
-        .unwrap_or("created_at");
+	let order_column = params
+		.sort_by
+		.as_ref()
+		.map(|s| s.to_sql_column())
+		.unwrap_or("created_at");
 
-    let order_direction = params
-        .order
-        .map(|o| o.to_sql_keyword())
-        .unwrap_or("DESC");
+	let order_direction = params
+		.order
+		.as_ref()
+		.map(|o| o.to_sql_keyword())
+		.unwrap_or("DESC");
 
-    let total_items = sqlx::query!(
-        "SELECT COUNT(*) as count FROM download_history WHERE user_id = ?",
-        user.user_id
-    )
-    .fetch_one(&state.db)
-    .await
-    .map(|row| row.count)
-    .unwrap_or(0);
+	// Total items count matching the exact filters
+	let mut count_query: QueryBuilder<Sqlite> = QueryBuilder::new(
+		"SELECT COUNT(*) as count FROM download_history WHERE user_id = "
+	);
+
+	count_query.push_bind(&user.user_id);
+	his_fltr(&mut count_query, params.status.as_deref(),
+	params.category.as_deref());
+
+	#[derive(sqlx::FromRow)]
+	struct CountRow {
+		count: i64,
+	}
+
+	let total_items = count_query
+		.build_query_as::<CountRow>()
+		.fetch_one(&state.db)
+		.await
+		.map(|row| row.count as u32)
+		.unwrap_or(0);
 
     let total_pages = if total_items == 0 {
         0
@@ -2364,6 +2980,7 @@ pub async fn get_history(
             gid,
 			name,
 			kind,
+			category,
 			status,
 			dir,
 			files,
@@ -2379,9 +2996,7 @@ pub async fn get_history(
 			torrent,
 			options,
 			is_resume_supported,
-			connections,
             num_pieces,
-			num_seeders,
 			piece_length,
 			verified_length,
             verify_integrity_pending,
@@ -2393,6 +3008,9 @@ pub async fn get_history(
     );
 
 	query.push_bind(&user.user_id);
+	his_fltr(&mut query, params.status.as_deref(),
+    params.category.as_deref());
+
 
     // Dynamically append the sort params
     query.push(" ORDER BY ");
@@ -2411,7 +3029,7 @@ pub async fn get_history(
 	{
 		Ok(data) => data,
 		Err(err) => {
-			error!("Failed to fetch download history for user id {}: {:?}", user.user_id, &err);
+			error!("Failed to fetch download history for user {}: {:?}", user.username, &err);
 			return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
@@ -2443,14 +3061,116 @@ pub async fn delete(
     user: AuthenticatedUser,
     Json(payload): Json<RemoveHisReq>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    for gid in payload.gids {
-        /*
-          * First free from aria2
-          * Kinda inefficient, later check the status then do according to it
-        */
-        let _ = state.aria2.call("aria2.forcePause", vec![json!(gid)]).await;
-        let _ = state.aria2.call("aria2.forceRemove", vec![json!(gid)]).await;
-        let _ = state.aria2.call("aria2.removeDownloadResult", vec![json!(gid)]).await;
+    let gids: Vec<String> = payload
+        .gids
+        .iter()
+        .filter_map(|gid| {
+            let gid = gid.trim();
+            if gid.is_empty() {
+                None
+            } else {
+                Some(gid.to_string())
+            }
+        })
+        .collect();
+
+    if gids.is_empty() {
+        return Ok(Json(serde_json::json!({
+			"error": "No GID provided for deletion."
+        })));
+    }
+
+    // `forceRemove` first
+    let mut elgbl_for_res: Vec<String> = Vec::new();
+
+    for chunk in gids.chunks(MAX_MULTICALL_BATCH) {
+        let mut force_remove_batch = Vec::new();
+
+        for gid in chunk {
+            force_remove_batch.push(serde_json::json!({
+                "methodName": "aria2.forceRemove",
+                "params": [gid]
+            }));
+        }
+
+        let response = match state.aria2.call("system.multicall", vec![serde_json::json!(force_remove_batch)]).await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("Method `aria2.forceRemove` multicall failed: {:?}", e);
+                continue;
+            }
+        };
+
+        let results = match response.as_array() {
+            Some(v) => v,
+            None => {
+                warn!("Method `aria2.forceRemove` multicall returned unexpected payload: {:?}", response);
+                continue;
+            }
+        };
+
+		for (idx, item) in results.iter().enumerate() {
+			let gid = match chunk.get(idx) {
+				Some(g) => g.to_string(),
+				None => continue,
+			};
+
+			let is_cannot_remove = match item {
+				serde_json::Value::Object(obj) => obj
+					.get("message")
+					.and_then(serde_json::Value::as_str)
+					.map(|msg| {
+						debug!("Method `aria2.forceRemove` error message: {:?}", msg);
+						msg.to_lowercase().contains("cannot be removed now")
+					})
+					.unwrap_or(false),
+
+				_ => false,
+			};
+
+			if is_cannot_remove {
+				warn!(
+					"Skipping GID {:?} because `aria2.forceRemove` says it cannot be removed now",
+					gid
+				);
+				continue;
+			}
+
+			// Any other forceRemove result means this GID is still eligible:
+			// - success array like ["gid"]
+			// - error object like {"code":1,"message":"..."}
+			// - other non-"cannot be removed now" failures
+			elgbl_for_res.push(gid);
+		}
+    }
+
+    // `removeDownloadResult` only for the eligible set
+    if !elgbl_for_res.is_empty() {
+        for chunk in elgbl_for_res.chunks(MAX_MULTICALL_BATCH) {
+            let mut remove_result_batch = Vec::new();
+
+            for gid in chunk {
+                remove_result_batch.push(serde_json::json!({
+                    "methodName": "aria2.removeDownloadResult",
+                    "params": [gid]
+                }));
+            }
+
+            // Do not care whether this returns OK or an error.
+            // It is only for formality so aria2 does not keep the removed GIDs around.
+            let _ = state
+                .aria2
+                .call("system.multicall", vec![serde_json::json!(remove_result_batch)])
+                .await;
+        }
+    }
+
+
+    for gid in &elgbl_for_res {
+        if !elgbl_for_res.contains(gid) {
+            warn!("Skipping DB deletion for GID {:?} because it was not freed from Aria2.", gid);
+            continue;
+        }
 
         if payload.delete_file {
             let record = sqlx::query!(
@@ -2470,6 +3190,7 @@ pub async fn delete(
                     let name = name.to_string();
                     if let Some(files_str) = rec.files {
                         let file_paths: Vec<String> = serde_json::from_str(&files_str).unwrap_or_default();
+						debug!("File paths to delete: {:?}", file_paths);
                         for path in file_paths {
                             let path = Path::new(&path);
                             debug!("Removing file: {:?}", path);
@@ -2477,24 +3198,38 @@ pub async fn delete(
                                 continue;
                             }
                             if path.is_dir() {
-                                let _ = std::fs::remove_dir_all(&path);
+								match std::fs::remove_dir_all(&path) {
+									Ok(_) => {
+										debug!("Successfully deleted: {:?}", path);
+									}
+									Err(e) => {
+										error!("Failed to delete `{:?}`: {:?}", path, e);
+									}
+								}
                             } else {
-                                let _ = std::fs::remove_file(&path);
+								match std::fs::remove_file(&path) {
+									Ok(_) => {
+										debug!("Successfully deleted: {:?}", path);
+									}
+									Err(e) => {
+										error!("Failed to delete `{:?}`: {:?}", path, e);
+									}
+								}
                             }
                             if let Some(root) = download_dir {
                                 let aria_name = format!("{}.aria2", name);
                                 let aria2_path = root.join(Path::new(&aria_name));
-                                let _ = std::fs::remove_file(aria2_path);
+								let _ = std::fs::remove_file(&aria2_path)
+									.map(|_| debug!("Successfully deleted .aria2 file: {:?}", &aria2_path))
+									.map_err(|e| error!("Failed to delete .aria2 file: `{:?}`: {:?}", aria2_path, e));
                                 let mut current = path.parent();
                                 while let Some(dir) = current {
                                     if dir == root {
                                         break;
                                     }
-
                                     if !dir.exists() || !dir.is_dir() {
                                         break;
                                     }
-
                                     let is_empty = std::fs::read_dir(dir)
                                         .map(|mut entries| entries.next().is_none())
                                         .unwrap_or(false);
@@ -2503,7 +3238,9 @@ pub async fn delete(
                                         break;
                                     }
 
-                                    let _ = std::fs::remove_dir(dir);
+									let _ = std::fs::remove_dir(dir)
+										.map(|_| debug!("Successfully deleted: {:?}", path))
+										.map_err(|e| error!("Failed to delete `{:?}`: {:?}", path, e));
                                     current = dir.parent();
                                 }
                             }
@@ -2533,7 +3270,7 @@ pub async fn delete(
             return Err((
                 StatusCode::NOT_FOUND,
                 Json(json!({
-                    "error": format!("Download history record not found from GID {}", gid)
+                    "error": format!("Download history record not found from GID: {:?}", gid)
                 })),
             ));
         }
@@ -2541,12 +3278,15 @@ pub async fn delete(
         info!("Deleted gid: {:?}", gid);
     }
 
-    Ok(Json(json!({ "status": "deleted" })))
+    Ok(Json(json!({
+		"status": "deleted",
+		"deletionCount": elgbl_for_res.len()
+	})))
 }
 
 
-/// Get count based on `ItemCategory` and `GidStatus`
-pub async fn get_item_stats(
+/// Get count based on `Category` and `GidStatus`
+pub async fn get_items_count(
     State(state): State<AppState>,
     user: AuthenticatedUser,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
@@ -2555,15 +3295,11 @@ pub async fn get_item_stats(
 	  * Get minimal required col from `download_history`
 	  * Based on user
 	*/
-    let rows = sqlx::query_as::<_, DownloadRowForItemCount>(
-        r#"
-			SELECT name, status, kind
-			FROM download_history
-			WHERE user_id = ?
-        "#
+    let rows = sqlx::query!(
+        "SELECT name, status, kind, category FROM download_history WHERE user_id = ?",
+		user.user_id
     )
-    .bind(&user.user_id)
-    .fetch_all(&state.db)
+	.fetch_all(&state.db)
     .await
 	.map_err(|e|
 		(StatusCode::INTERNAL_SERVER_ERROR,
@@ -2589,36 +3325,46 @@ pub async fn get_item_stats(
             _ => {}												// Fallback
         }
 
-        // Category mapping
-        let category = ItemCategory::determine(row.name.as_deref(), &row.kind);
-        match category {
-            ItemCategory::Torrent => stats.by_category.torrent += 1,
-            ItemCategory::Music => stats.by_category.music += 1,
-            ItemCategory::Photos => stats.by_category.photos += 1,
-            ItemCategory::Programs => stats.by_category.programs += 1,
-            ItemCategory::Videos => stats.by_category.videos += 1,
-            ItemCategory::Subtitles => stats.by_category.subtitles += 1,
-            ItemCategory::Compressed => stats.by_category.compressed += 1,
-            ItemCategory::Others => stats.by_category.others += 1,
-            ItemCategory::Everything => {}						// Fallback
-        }
+		let cat_str = row.category.unwrap_or_else(|| {
+			match Category::determine(row.name.as_deref(), &row.kind) {
+				Category::Torrent => "torrent".to_string(),
+				Category::Music => "music".to_string(),
+				Category::Photos => "photos".to_string(),
+				Category::Programs => "programs".to_string(),
+				Category::Videos => "videos".to_string(),
+				Category::Subtitles => "subtitles".to_string(),
+				Category::Compressed => "compressed".to_string(),
+				Category::Others => "others".to_string(),
+			}
+		});
+
+		match cat_str.as_str()  {
+			"torrent" => stats.by_category.torrent += 1,
+			"music" => stats.by_category.music += 1,
+			"photos" => stats.by_category.photos += 1,
+			"programs" => stats.by_category.programs += 1,
+			"videos" => stats.by_category.videos += 1,
+			"subtitles" => stats.by_category.subtitles += 1,
+			"compressed" => stats.by_category.compressed += 1,
+			_ => stats.by_category.others += 1,
+		}
     }
 
     Ok(Json(json!({ "data": stats })))
 }
 
-impl ItemCategory {
+impl Category {
     pub fn determine(name: Option<&str>, kind: &str) -> Self {
 		if kind == "torrent" {
-            return ItemCategory::Torrent;
+            return Category::Torrent;
         }
 
 		let Some(filename) = name else {
-            return ItemCategory::Others;
+            return Category::Others;
 		};
 
 		if filename.ends_with(".torrent") {
-            return ItemCategory::Torrent;
+            return Category::Torrent;
         }
 
         // Guess the format by extension without reading the file from disk
@@ -2629,19 +3375,22 @@ impl ItemCategory {
 
 		if let Some(format) = FileFormat::from_extension(ext).first() {
             match format.kind() {
-                FileKind::Audio => ItemCategory::Music,
-                FileKind::Image => ItemCategory::Photos,
-                FileKind::Executable | FileKind::Package | FileKind::Rom => ItemCategory::Programs,
-                FileKind::Video => ItemCategory::Videos,
-                FileKind::Subtitle => ItemCategory::Subtitles,
-                FileKind::Archive | FileKind::Compressed => ItemCategory::Compressed,
-                _ => ItemCategory::Others,
+                FileKind::Audio => Category::Music,
+                FileKind::Image => Category::Photos,
+                FileKind::Executable | FileKind::Package | FileKind::Rom => Category::Programs,
+                FileKind::Video => Category::Videos,
+                FileKind::Subtitle => Category::Subtitles,
+                FileKind::Archive | FileKind::Compressed => Category::Compressed,
+                _ => Category::Others,
             }
         } else {
-            ItemCategory::Others
+            Category::Others
         }
     }
 }
+
+
+
 
 /// Ref: https://aria2.github.io/manual/en/html/aria2c.html#aria2.changeUri
 /// Change the URI by GID
@@ -2663,11 +3412,42 @@ pub async fn manage_seeding(
 }
 
 /// Ref: https://aria2.github.io/manual/en/html/aria2c.html#aria2.purgeDownloadResult
-/// Purge `completed, error, removed` dl and free aria2 memory
-pub async fn purge_results(State(state): State<AppState>) -> impl IntoResponse {
+/// Purge `completed, error, stopped` dl and free aria2 memory
+pub async fn purge_all(
+	State(state): State<AppState>,
+    user: AuthenticatedUser,
+) -> impl IntoResponse {
+    let gids: HashSet<String> = sqlx::query_scalar!(
+        r#"
+        SELECT gid
+        FROM download_history
+        WHERE user_id = ?
+          AND status IN ('complete', 'error', 'stopped')
+        "#,
+        user.user_id
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })
+    .into_iter()
+    .flatten()
+    .collect();
+
+    if gids.is_empty() {
+		return (
+			StatusCode::BAD_REQUEST,
+			Json(json!({ "error": "No complete, error, stopped downloads to purge." })),
+		);
+    }
+
     match state.aria2.call("aria2.purgeDownloadResult", vec![]).await {
-        Ok(_) => (StatusCode::OK, Json(json!({ "status": "purged" }))),
-        Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({ "error": e }))),
+        Ok(_) => (StatusCode::OK, Json(json!({ "status": "purgedAll" }))),
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({ "error": e.to_string() }))),
     }
 }
 

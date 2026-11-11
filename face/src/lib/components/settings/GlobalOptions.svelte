@@ -506,41 +506,6 @@
 				Save them before closing or discard them
 			</Dialog.Description>
     </Dialog.Header>
-    <div class="mt-4 flex flex-row max-sm:hidden flex-wrap justify-evenly md:justify-end gap-2">
-      <Button
-        variant="destructive"
-        onclick={() => {
-          workingDraft = cloneDraft(initialDraft);
-          showUnsavedChangesDialog = false;
-          open = false;
-        }}
-        class="cursor-pointer max-sm:w-32 max-sm:text-[14px]"
-      >
-        Discard changes
-      </Button>
-      <Button
-				variant="outline"
-				onclick={() => {
-					open = true
-					showUnsavedChangesDialog = false
-				}}
-				class="cursor-pointer max-sm:w-32 max-sm:text-[14px]">
-				Keep editing
-			</Button>
-      <Button
-        onclick={async () => {
-          const saved = await save();
-          if (saved) {
-            showUnsavedChangesDialog = false;
-						open = false
-          }
-        }}
-        disabled={isSaving}
-        class="cursor-pointer min-w-32 max-sm:w-32 max-sm:text-[14px]"
-      >
-        {isSaving ? "Saving..." : "Save & close"}
-      </Button>
-    </div>
 		<!-- For mobile devices -->
 		<div class="w-full! flex justify-center">
 			<Button
@@ -579,6 +544,44 @@
         {isSaving ? "Saving..." : "Save & close"}
       </Button>
     </div>
+
+    <Dialog.Footer class="justify-center!">
+			<div class="flex flex-row max-sm:hidden flex-wrap justify-evenly md:justify-center gap-3">
+				<Button
+					variant="destructive"
+					onclick={() => {
+						workingDraft = cloneDraft(initialDraft);
+						showUnsavedChangesDialog = false;
+						open = false;
+					}}
+					class="cursor-pointer min-sm:w-32 max-sm:text-[14px]"
+				>
+					Discard changes
+				</Button>
+				<Button
+					variant="outline"
+					onclick={() => {
+						open = true
+						showUnsavedChangesDialog = false
+					}}
+					class="cursor-pointer min-sm:w-32 max-sm:text-[14px]">
+					Keep editing
+				</Button>
+				<Button
+					onclick={async () => {
+						const saved = await save();
+						if (saved) {
+							showUnsavedChangesDialog = false;
+							open = false
+						}
+					}}
+					disabled={isSaving}
+					class="cursor-pointer min-w-32 max-sm:w-32 max-sm:text-[14px]"
+				>
+					{isSaving ? "Saving..." : "Save & close"}
+				</Button>
+			</div>
+    </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
 

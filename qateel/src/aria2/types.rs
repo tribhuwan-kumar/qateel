@@ -58,22 +58,19 @@ pub struct GidReq {
     pub gid: String,
 }
 
-/// Pause multiple ddl
+/// Pause multiple dl
 #[derive(Deserialize, Debug)]
 #[serde(rename_all="camelCase")]
 pub struct PauseReq {
     pub gids: Option<Vec<String>>,
-    pub pause_all: Option<bool>,
     pub force_pause: Option<bool>,
-    pub force_pause_all: Option<bool>,
 }
 
-/// Resume multiple ddl from pause
+/// Resume multiple dl from pause
 #[derive(Deserialize, Debug)]
 #[serde(rename_all="camelCase")]
 pub struct ResumeReq {
     pub gids: Option<Vec<String>>,
-    pub resume_all: Option<bool>,
 }
 
 /// Stop multiple dl
@@ -165,19 +162,21 @@ pub enum Order {
 pub struct PaginationQuery {
     pub page: Option<u32>,
     pub limit: Option<u32>,
-    pub sort_by: Option<SortBy>,
+    pub sort_by: Option<SortBy>,				// Order by: size, name, or time
     pub order: Option<Order>,
+	pub status: Option<String>,					// `GidStatus` & "all" extra
+	pub category: Option<String>,				// `Category` & "everything" extra
 }
 
 /// Search
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchQuery {
-    #[serde(default, alias = "q", alias = "query", alias = "search", alias = "term")]
+    #[serde(default, alias = "q", alias = "query", alias = "search")]
     pub q: Option<String>,
-    #[serde(default, alias = "type", alias = "kind")]
+    #[serde(default, alias = "ft")]
     pub file_type: Option<String>,
-    #[serde(default, alias = "ext", alias = "extension")]
+    #[serde(default, alias = "ext")]
     pub extension: Option<String>,
     #[serde(default)]
     pub page: Option<u32>,
@@ -218,7 +217,7 @@ pub struct UriInfoRes {
     pub uri: String,
     pub name: String,
     pub total_length: String,
-    pub is_resume_supported: bool,
+    pub is_resume_supported: String,
     pub is_magnet: bool,
     pub is_ftp: bool,
     pub is_sftp: bool,
@@ -234,7 +233,7 @@ pub struct AddUriTask {
     pub uri: String,
     pub name: String,
     pub total_length: String,
-    pub is_resume_supported: bool,
+    pub is_resume_supported: String,					// String bool
     pub options: Option<serde_json::Map<String, Value>>,
 }
 
@@ -242,6 +241,17 @@ pub struct AddUriTask {
 #[serde(rename_all = "camelCase")]
 pub struct AddUriReq {
 	pub tasks: Vec<AddUriTask>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PendingAddUri {
+	pub	index: usize,
+	pub	kind: Kind,
+	pub category: Category,
+	pub	name: String,
+	pub	source_uri: String,
+	pub	total_length: String,
+	pub is_resume_supported: String,					// String bool
 }
 
 /// If name has conflict
@@ -287,30 +297,81 @@ pub struct TorrentMagnetMeta {
     pub name: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq, sqlx::Type, Serialize, Deserialize)]
 #[sqlx(type_name = "TEXT")]
 #[sqlx(rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
-pub enum GidStatus {
+pub enum Category {									/* Insert `Everything` manually */
+    Torrent,
+    Music,
+    Photos,
+    Programs,
+    Videos,
+    Subtitles,
+    Compressed,
+	#[default]
+    Others,
+}
+
+impl From<String> for Category {
+    fn from(value: String) -> Self {
+        Category::from(value.as_str())
+    }
+}
+
+impl From<&str> for Category{
+    fn from(value: &str) -> Self {
+        match value.to_lowercase().as_str() {
+			"torrent" => Category::Torrent,
+            "music" => Category::Music,
+            "photos" => Category::Photos,
+            "programs" => Category::Programs,
+            "videos" => Category::Videos,
+            "subtitles" => Category::Subtitles,
+            "compressed" => Category::Compressed,
+            _ => Category::Others,}
+    }
+}
+
+impl Category {
+	pub fn as_str(&self) -> &'static str {
+		match self {
+			Category::Torrent => "torrent",
+            Category::Music => "music",
+            Category::Photos => "photos",
+            Category::Programs => "programs",
+            Category::Videos => "videos",
+            Category::Subtitles => "subtitles",
+            Category::Compressed => "compressed",
+            Category::Others => "others",}
+	}
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
+#[sqlx(type_name = "TEXT")]
+#[sqlx(rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum GidStatus {								/* Insert `All` manually */
     /// onDownloadError
     Error,
     /// onDownloadPause
     Paused,
-    /// onDownloadStart, `aria2.tellActive`
+    /// onDownloadStart
     Active,
-    /// onDownloadStart, `aria2.tellActive`
+    /// onDownloadStart but its in queue
+	#[default]
     Waiting,
-    /// onDownloadStop also file is deleted
+    /// When file is deleted but history remains
     Removed,
     /// onDownloadStop but the `file-allocation` exists
     Stopped,
-    /// When `is_torrent` and download is `complete` & `seeder`, then we're seeding the torrent
+    /// When `is_torrent` and download is `complete` & `seeder` is true, then we're seeding the torrent
     Seeding,
     /// onDownloadComplete or onBtDownloadComplete
     Complete,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
 #[sqlx(type_name = "TEXT")]
 #[sqlx(rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
@@ -318,8 +379,9 @@ pub enum Kind {
     /// Metalink is just uri
     Uri,
     /// Magnet too
-    Torrent,
+	Torrent,
     /// For others
+	#[default]
     Unknown,
 }
 
@@ -343,22 +405,49 @@ impl From<&str> for Kind {
     }
 }
 
+impl Kind {
+	pub fn as_str(&self) -> &'static str {
+		match self {
+			Kind::Uri => "uri",
+			Kind::Torrent => "torrent",
+			Kind::Unknown => "unknown",
+		}
+	}
+}
+
+/// From string bool to actual bool
+impl ItemMetaData {
+    pub fn seeder_bool(&self) -> Option<bool> {
+        self.seeder.as_ref().map(|s| s.eq_ignore_ascii_case("true"))
+    }
+
+    pub fn is_resume_supported_bool(&self) -> Option<bool> {
+        self.is_resume_supported.as_ref().map(|s| s.eq_ignore_ascii_case("true"))
+    }
+
+    pub fn verify_integrity_pending_bool(&self) -> Option<bool> {
+        self.verify_integrity_pending.as_ref().map(|s| s.eq_ignore_ascii_case("true"))
+    }
+}
+
 /// Emits on events
 /// These structs are defined based on the `1DM Manager android`, for saving in DB
-#[derive(Serialize, Debug, Clone, sqlx::FromRow)]
+#[derive(Serialize, Debug, Clone, sqlx::FromRow, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ItemMetaData {
     pub gid: String,
-    /// DDl actual name
+    /// Dl actual name
     pub name: Option<String>,
-    /// what type of download
+    /// What type of download
     pub kind: Kind,
+	/// What the category
+    pub category: Option<Category>,
     /// What's the status
     pub status: GidStatus,
     /// Directory where its being downloaded
     pub dir: Option<String>,
     /// Acutal path of the content being downloaded
-    /// It can be multiple for torrents; storing json array
+    /// It can be multiple for torrents; storing as json array
     pub files: Option<String>,
     /// Total length of content it gonna download
     pub total_length: Option<String>,
@@ -366,36 +455,32 @@ pub struct ItemMetaData {
     pub completed_length: Option<String>,
     /// How much its uploaded
     pub upload_length: Option<String>,
-    /// Source only for uri based ddl `Download link`
+    /// Source only for uri based dl `Download link`
     pub source_uri: Option<String>,
     /// Hash of the only (magnets or torrent)
     pub info_hash: Option<String>,
-    /// If it was a seeder; so on restart start as seeder
-    pub seeder: Option<bool>,
+    /// If it was a seeder; so on restart start as seeder, (BOOL)
+    pub seeder: Option<String>,
     /// Hash for anything
     pub content_hash: Option<String>,
     /// If the download failed for some reason
     pub error_code: Option<i64>,
     /// Message for that error code
     pub error_message: Option<String>,
-    /// torrent/magnet metadata
-    pub torrent: Option<sqlx::types::Json<TorrentMagnetMeta>>,
+    /// torrent/magnet metadata `TorrentMagnetMeta`
+    pub torrent: Option<String>,
 	/// GID specific options
 	pub options: Option<String>,
-    /// Is resume supported??
-    pub is_resume_supported: Option<bool>,
-    /// When does that dl created
-    pub connections: Option<String>,
+    /// Is resume supported?? (BOOL)
+    pub is_resume_supported: Option<String>,
 	/// Number of pieces
     pub num_pieces: Option<String>,
-	/// Number of seeders
-    pub num_seeders: Option<String>,
 	/// A piece length
     pub piece_length: Option<String>,
 	/// Hash checked length
     pub verified_length: Option<String>,
-	/// Hash check pending
-    pub verify_integrity_pending: Option<bool>,
+	/// Hash check pending (BOOL)
+    pub verify_integrity_pending: Option<String>,
     /// When does that dl created
     pub created_at: Option<NaiveDateTime>,
     /// When does that dl completed
@@ -416,7 +501,7 @@ pub struct TickTask {
     pub status: GidStatus,
 	pub dir: Option<String>,
     pub source_uri: Option<String>,
-	pub is_resume_supported: Option<bool>,
+    pub is_resume_supported: Option<String>,
 	/// JSON array string
     pub files: Option<String>,
 	/// Values those need streaming updates
@@ -428,15 +513,24 @@ pub struct TickTask {
     pub download_speed: String,
     pub upload_speed: String,
 	pub num_seeders: Option<String>,
-	pub seeder: Option<bool>,
-	pub verify_integrity_pending: Option<bool>,
+    pub seeder: Option<String>,
+    pub verify_integrity_pending: Option<String>,
 }
 
-/// Ddl stats
+impl Default for DlWsMessage {
+    fn default() -> Self {
+        DlWsMessage::Tick {
+            user_id: String::new(),
+            tasks: Vec::new(),
+        }
+    }
+}
+
+/// Dl stats
 #[derive(Clone, Serialize, Debug)]
 #[serde(tag = "type")]
 #[serde(rename_all = "camelCase")]
-pub enum DdlWsMessage {
+pub enum DlWsMessage {
     #[serde(rename = "tick")]
     Tick {
         #[serde(skip)]
@@ -447,7 +541,7 @@ pub enum DdlWsMessage {
     Event {
         #[serde(skip)]
         user_id: String,
-        data: ItemMetaData,
+        data: Vec<ItemMetaData>,
     }
 }
 
@@ -460,6 +554,15 @@ pub struct GlobalStat {
     pub num_waiting: String,
     pub num_stopped: String,
     pub num_stopped_total: String,
+}
+
+impl Default for GlobalStatWsMessage {
+    fn default() -> Self {
+        GlobalStatWsMessage::Global {
+            user_id: String::new(),          // Empty string fallback
+            data: GlobalStat::default(),     // GlobalStat's Default trait
+        }
+    }
 }
 
 /// Global stats emited by ws
@@ -531,17 +634,24 @@ pub struct BitTorrent {
 pub struct Aria2Res {
     pub gid: String,
     pub status: String,
+	#[serde(default)]
     pub dir: String,
+	#[serde(default)]
     pub download_speed: String,
+	#[serde(default)]
     pub upload_speed: String,
+	#[serde(default)]
     pub total_length: String,
+	#[serde(default)]
     pub completed_length: String,
+	#[serde(default)]
     pub upload_length: String,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
     pub bitfield: Option<String>,
     pub info_hash: Option<String>,
     pub bittorrent: Option<BitTorrent>,
+	#[serde(default)]
     pub files: Vec<Aria2File>,
     pub connections: Option<String>,
     pub num_pieces: Option<String>,
@@ -555,21 +665,6 @@ pub struct Aria2Res {
     pub verified_length: Option<String>,
     /// Res is string: "true" | "false"
     pub verify_integrity_pending: Option<String>
-}
-
-/// Categorize items
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ItemCategory {
-    Everything,
-    Torrent,
-    Music,
-    Photos,
-    Programs,
-    Videos,
-    Subtitles,
-    Compressed,
-    Others,
 }
 
 #[derive(Serialize, Default, Clone)]
@@ -603,13 +698,6 @@ pub struct CategoryCounts {
 pub struct ItemCoundStatsRes {
     pub by_status: StatusCounts,
     pub by_category: CategoryCounts,
-}
-
-#[derive(sqlx::FromRow)]
-pub struct DownloadRowForItemCount {
-    pub name: Option<String>,
-    pub status: String,
-    pub kind: String,
 }
 
 /// Torrent or Magnet probing metadata

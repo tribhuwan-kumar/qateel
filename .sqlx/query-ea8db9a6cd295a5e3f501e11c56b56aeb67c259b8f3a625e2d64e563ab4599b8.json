@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT\n\t\t\t\tgid,\n\t\t\t\tdir,\n\t\t\t\tname,\n\t\t\t\tfiles,\n\t\t\t\tinfo_hash,\n\t\t\t\tsource_uri,\n\t\t\t\tstatus as \"status: GidStatus\"\n            FROM download_history\n            WHERE (info_hash = $1 AND $1 IS NOT NULL)\n               OR (source_uri = $2 AND $2 IS NOT NULL)\n               OR (name = $3 AND $3 IS NOT NULL AND $3 != '' AND $3 != $4)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "gid",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "dir",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "name",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "files",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "info_hash",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "source_uri",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "status: GidStatus",
+        "ordinal": 6,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "ea8db9a6cd295a5e3f501e11c56b56aeb67c259b8f3a625e2d64e563ab4599b8"
+}

@@ -1,20 +1,25 @@
+import { get } from 'svelte/store';
 import { toast } from "svelte-sonner";
 import { writable } from 'svelte/store';
+import { historySort } from "$lib/sort";
 import { secureFetch } from "$lib/utils";
 import { browser } from "$app/environment";
 import { truncateMiddle } from "$lib/utils";
-import { selectedGids } from "$lib/selection";
+import { type Order, type SortBy } from "$lib/sort";
+import { selectedGids, isActivelySelecting } from "$lib/selection";
 import type {
+	Kind,
   StopReq,
   PauseReq,
 	TickTask,
   ResumeReq,
 	AddUriReq,
+	GidStatus,
 	UriInfoRes,
 	UriInfoReq,
   GlobalStat,
-	AddUriTask,
-  DdlWsMessage,
+	SpeedRecord,
+  DlWsMessage,
   Aria2Options,
   ItemMetaData,
 	SearchParams,
@@ -22,6 +27,7 @@ import type {
   ChangeOptionReq,
   HistoryResponse,
 	Aria2CmdOptions,
+	HistoryQueryParams,
   Aria2GlobalOptions,
 	ChangeCmdOptionReq,
   ChangeGlobalOptionReq,
@@ -33,6 +39,13 @@ import {
 	SvelteDate,
 	SvelteURLSearchParams
 } from "svelte/reactivity";
+import {
+	selectedStatus,
+	selectedCategory,
+	getItemCategory
+} from "$lib/categorize";
+
+let TOTAL_ITEMS = $state<number>(0);
 
 export const UNTITLED: string = "<Untitled>";
 
@@ -60,14 +73,29 @@ export const aria2Info = writable<Record<string, any>>();
 export const itemCounts = writable<Record<string, any>>();
 
 export class Aria2Manager {
-  private ddlWs: WebSocket | null = null;
+  private dlWs: WebSocket | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
 
   private globalStatWs: WebSocket | null = null;
   private globalStatRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private globalStatWatchdog: ReturnType<typeof setTimeout> | null = null;
 
-  constructor() {}
+	// Buffer insertions while drag selection is active so rows don't shift under the pointer
+	private pendingNewItems: ItemMetaData[] = [];
+
+	constructor() {
+		if (browser) {
+			isActivelySelecting.subscribe((selecting) => {
+				if (!selecting && this.pendingNewItems.length > 0) {
+					const sort = get(historySort);
+					for (const item of this.pendingNewItems) {
+						this.insertSortedItem(aria2Store.items, item, sort?.sortBy ?? "time", sort?.order ?? "desc");
+					}
+					this.pendingNewItems = [];
+				}
+			});
+		}
+	}
 
   private resetWatchdog() {
     if (this.globalStatWatchdog) clearTimeout(this.globalStatWatchdog);
@@ -76,136 +104,160 @@ export class Aria2Manager {
     }, 5000);
   }
 
-  connectDdlWs() {
-    if (!browser || this.ddlWs) return;
+  connectDlWs() {
+    if (!browser || this.dlWs) return;
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const host = window.location.host;
-    const url = `${protocol}//${host}/api/ws/ddl`;
+    const url = `${protocol}//${host}/api/ws/dl`;
 
     aria2Store.connection = "connecting";
-    this.ddlWs = new WebSocket(url);
+    this.dlWs = new WebSocket(url);
 
-    this.ddlWs.onopen = () => {
-      console.log("Connected to tick stream");
+    this.dlWs.onopen = () => {
+      console.log("Connected to dl ws.");
       aria2Store.connection = "connected";
     };
 
-    this.ddlWs.onclose = () => {
+    this.dlWs.onclose = () => {
       console.log("Disconnected from tick stream");
       aria2Store.connection = "disconnected";
-      this.ddlWs = null;
+      this.dlWs = null;
       if (this.retryTimer) clearTimeout(this.retryTimer);
-      this.retryTimer = setTimeout(() => this.connectDdlWs(), 5000);
+      this.retryTimer = setTimeout(() => this.connectDlWs(), 5000);
     };
 
-    this.ddlWs.onmessage = (event) => this.handleDdlMessage(event);
+    this.dlWs.onmessage = (event) => this.handleDlMessage(event);
   }
 
-  private handleDdlMessage(event: MessageEvent) {
-    try {
-      const msg: DdlWsMessage = JSON.parse(event.data);
+	private async handleDlMessage(event: MessageEvent) {
+		try {
+			const msg: DlWsMessage = JSON.parse(event.data);
+			if (msg.type === "tick") {
+				const existingGids = new SvelteSet(aria2Store.items.map(i => i.gid));
+				const taskByGid = new SvelteMap<string, TickTask>(msg.tasks.map(task => [task.gid, task]));
 
-      if (msg.type === "tick") {
-        // Use `SvelteMap` and `SvelteSet`
-				const seen = new SvelteSet<string>();
-        const taskByGid = new SvelteMap<string, TickTask>(msg.tasks.map(task => [task.gid, task]));
+				for (let i = 0; i < aria2Store.items.length; i++) {
+					const item = aria2Store.items[i];
+					const task = taskByGid.get(item.gid);
+					if (!task) continue;
 
-        // Update existing items in place
-        for (let i = 0; i < aria2Store.items.length; i++) {
-          const item = aria2Store.items[i];
-          const task = taskByGid.get(item.gid);
+					// Live telemetry
+					item.status = task.status;
+					item.totalLength = task.totalLength;
+					item.completedLength = task.completedLength;
+					item.uploadLength = task.uploadLength;
+					item.downloadSpeed = task.downloadSpeed;
+					item.uploadSpeed = task.uploadSpeed;
 
-          if (task) {
-            seen.add(item.gid);
+					// Nullable merge
+					if (task.connections != null) item.connections = task.connections;
+					if (task.verifiedLength != null) item.verifiedLength = task.verifiedLength;
+					if (task.dir != null) item.dir = task.dir;
+					if (task.files != null) item.files = task.files;
+					if (task.sourceUri != null) item.sourceUri = task.sourceUri;
+					if (task.verifyIntegrityPending != null) item.verifyIntegrityPending = task.verifyIntegrityPending;
+					if (task.isResumeSupported != null) item.isResumeSupported = task.isResumeSupported;
+					if (task.numSeeders != null) item.numSeeders = task.numSeeders;
+					if (task.seeder != null) item.seeder = task.seeder;
+					if (task.kind) item.kind = task.kind;
 
-            // Volatile data: overwrite unconditionally
-            item.status = task.status;
-            item.totalLength = task.totalLength;
-            item.completedLength = task.completedLength;
-            item.uploadLength = task.uploadLength;
-            item.downloadSpeed = task.downloadSpeed;
-            item.uploadSpeed = task.uploadSpeed;
-            item.connections = task.connections;
-            item.verifiedLength = task.verifiedLength;
-            item.dir = task.dir;
-            // Static data merge; fallbacks
-            if (task.name && task.name !== UNTITLED) {
-              item.name = task.name;
-            } else if (task.name && !item.name) {
-              item.name = task.name;
-            }
-            if (task.kind) item.kind = task.kind;
-            if (task.sourceUri) item.sourceUri = task.sourceUri;
-            if (task.verifyIntegrityPending !== null && task.verifyIntegrityPending !== undefined) {
-              item.verifyIntegrityPending = task.verifyIntegrityPending;
-            }
-            if (task.num_seeders) item.numSeeder = task.num_seeders;
-          }
-        }
+					if (task.name && task.name !== UNTITLED) {
+						item.name = task.name;
+					} else if (task.name && !item.name) {
+						item.name = task.name;
+					}
+				}
 
-        // Add new unseen tasks
-        const newItems = msg.tasks
-          .filter(task => !seen.has(task.gid))
-          .map(task => ({
-            gid: task.gid,
-            name: task.name,
-            status: task.status,
-            dir: task.dir,
-            kind: task.kind || null,
-            files: "[]",
-            totalLength: task.totalLength,
-            completedLength: task.completedLength,
-            uploadLength: task.uploadLength,
-            contentHash: null,
-            sourceUri: task.sourceUri || null,
-            infoHash: null,
-            seeder: null,
-            errorCode: null,
-            errorMessage: null,
-            torrent: null,
-            options: null,
-            isResumeSupported: null, // Unknown right now. Event websocket will fill this in!
-            connections: task.connections,
-            numPieces: null,
-            numSeeder: task.num_seeders || null,
-            pieceLength: null,
-            verifiedLength: task.verifiedLength,
-            verifyIntegrityPending: task.verifyIntegrityPending,
-            createdAt: new SvelteDate().toISOString(),
-            completedAt: null,
-            downloadSpeed: task.downloadSpeed,
-            uploadSpeed: task.uploadSpeed,
-          } as ItemMetaData));
+				// New tasks that match current active filter and sort
+				const sort = get(historySort);
+				const isSelecting = get(isActivelySelecting);
+				for (const task of msg.tasks) {
+					if (!existingGids.has(task.gid)) {
+						if (this.matchesCurrentFilter(task)) {
+							const newItem = this.tickTaskToItemMetaData(task);
+							existingGids.add(task.gid);
 
-        if (newItems.length > 0) {
-          aria2Store.items.unshift(...newItems);
-        }
+							if (isSelecting) {
+								if (!this.pendingNewItems.some(p => p.gid === newItem.gid)) {
+									this.pendingNewItems.push(newItem);
+								}
+							} else {
+								this.insertSortedItem(aria2Store.items, newItem, sort?.sortBy ?? "time", sort?.order ?? "desc");
+							}
+						}
+					}
+				}
 
-      } else if (msg.type === "event") {
-        this.handleDdlEvent(msg.data);
-      }
-    } catch (e) {
-      console.error("WS error", e);
-    }
-  }
+			} else if (msg.type === "event") {
+				console.log("Event message:", msg.data);
+				for (const item of msg.data){
+					this.handleDlEvent(item);
+				}
+			}
+		} catch (e) {
+      const message = this.extractErrorMessage(e)
+      toast.error(`${message ? message : "WebSocket error!!"}`, {
+        closeButton: true,
+        richColors: true,
+      });
+			console.error("WS error:", e);
+		} finally {
+			await this.getItemsCount()
+		}
+	}
 
-  private handleDdlEvent(newItem: ItemMetaData) {
-    const index = aria2Store.items.findIndex(i => i.gid === newItem.gid);
-    if (index !== -1) {
-      // Object.assign merges the new DB truth, but preserve the volatile speeds!
-      const currentDownloadSpeed = aria2Store.items[index].downloadSpeed;
-      const currentUploadSpeed = aria2Store.items[index].uploadSpeed;
+	private handleDlEvent(newItem: ItemMetaData) {
+		const index = aria2Store.items.findIndex(i => i.gid === newItem.gid);
+		const isStreaming = (s: GidStatus) => s === "active" || s === "seeding";
+		console.log("Event item index:", index);
+		if (index !== -1) {
+			const currentDownloadSpeed = aria2Store.items[index].downloadSpeed ?? "0";
+			const currentUploadSpeed = aria2Store.items[index].uploadSpeed ?? "0";
+			const currentNumSeeders = aria2Store.items[index].numSeeders ?? "0";
+			const currentconnections = aria2Store.items[index].connections ?? "0";
 
-      Object.assign(aria2Store.items[index], newItem);
+			Object.assign(aria2Store.items[index], newItem);
 
-      // Re-apply speeds since `newItem` (DB) doesn't have them
-      if (currentDownloadSpeed) aria2Store.items[index].downloadSpeed = currentDownloadSpeed;
-      if (currentUploadSpeed) aria2Store.items[index].uploadSpeed = currentUploadSpeed;
-    } else {
-      aria2Store.items.unshift(newItem);
-    }
-  }
+			// preserve speed only for streaming states
+			if (isStreaming(aria2Store.items[index].status)) {
+				aria2Store.items[index].downloadSpeed = currentDownloadSpeed;
+				aria2Store.items[index].uploadSpeed = currentUploadSpeed;
+				aria2Store.items[index].numSeeders = currentNumSeeders;
+				aria2Store.items[index].connections = currentconnections;
+			} else {
+				aria2Store.items[index].downloadSpeed = "0";
+				aria2Store.items[index].uploadSpeed = "0";
+				aria2Store.items[index].numSeeders = "0";
+				aria2Store.items[index].connections = "0";
+			}
+
+			// If filter changed such that it no longer matches the current filter, remove it cleanly
+			if (!this.matchesCurrentFilter(aria2Store.items[index])) {
+				aria2Store.items.splice(index, 1);
+			}
+
+		} else {
+			if (this.matchesCurrentFilter(newItem)) {
+				if (!isStreaming(newItem.status)) {
+					newItem.downloadSpeed = "0";
+					newItem.uploadSpeed = "0";
+					newItem.connections = "0";
+					newItem.numSeeders = "0";
+				}
+				const sort = get(historySort);
+				const isSelecting = get(isActivelySelecting);
+
+				if (isSelecting) {
+					if (!this.pendingNewItems.some(p => p.gid === newItem.gid)) {
+						this.pendingNewItems.push(newItem);
+					}
+				} else {
+					this.insertSortedItem(aria2Store.items, newItem, sort?.sortBy ?? "time", sort?.order ?? "desc");
+				}
+			}
+		}
+	}
 
   connectGlobalStatWs() {
     if (!browser || this.globalStatWs) return;
@@ -218,7 +270,7 @@ export class Aria2Manager {
     this.globalStatWs = new WebSocket(globalStatWsUrl);
 
     this.globalStatWs.onopen = () => {
-      console.log("Connected to global stat stream");
+      console.log("Connected to global stat ws.");
       aria2Store.connection = "connected";
       this.resetWatchdog();
     };
@@ -231,7 +283,7 @@ export class Aria2Manager {
           aria2Store.global = msg.data;
         }
       } catch (e) {
-        console.error("Bad message", e);
+        console.error("Bad message:", e);
       }
     };
 
@@ -249,29 +301,86 @@ export class Aria2Manager {
     };
   }
 
-  async loadInitialData(page = 1) {
-    try {
-      const res = await secureFetch(`/api/qateel/user/history?page=${page}&limit=15`);
-      const json: HistoryResponse = await res.json();
+	/**
+	 * Fetches paginated download history filtered by status and category.
+	 */
+	async getHistory(params: HistoryQueryParams = {}): Promise<HistoryResponse | null> {
+		try {
+			const page = params.page ?? 1;
+			const limit = params.limit ?? 15;
 
-      if (json.data) {
-        if (page === 1) {
-          aria2Store.items = json.data;
-        } else {
-          const seen = new SvelteSet(aria2Store.items.map(item => item.gid));
-          for (const item of json.data) {
-            if (!seen.has(item.gid)) {
-              aria2Store.items.push(item);
-            }
-          }
-        }
-      }
-      return json;
-    } catch (e) {
-      console.error(e);
-      return null;
-    }
-  }
+			const sp = new SvelteURLSearchParams();
+			sp.set("page", String(page));
+			sp.set("limit", String(limit));
+
+			if (params.sortBy) sp.set("sortBy", params.sortBy);
+			if (params.order) sp.set("order", params.order);
+			if (params.status && params.status !== "all") sp.set("status", params.status);
+			if (params.category && params.category !== "everything") sp.set("category", params.category);
+
+			console.log(`Get history params: '${sp.toString()}'`)
+			const res = await secureFetch(`/api/qateel/user/history?${sp.toString()}`);
+
+			if (!res.ok) {
+				const errorData = await res.json();
+				throw new Error(JSON.stringify(errorData));
+			}
+
+			const json: HistoryResponse = await res.json();
+
+			if (json.data) {
+				if (page === 1) {
+					aria2Store.items = json.data;
+				} else {
+					const seen = new SvelteSet(aria2Store.items.map((item) => item.gid));
+					for (const item of json.data) {
+						if (!seen.has(item.gid)) {
+							 aria2Store.items.push(item);
+						}
+					}
+				}
+			}
+
+			return json;
+		} catch (e) {
+			console.error("Error in getHistory:", e);
+      const message = this.extractErrorMessage(e)
+      toast.error(`${message ? message : "Failed to get history :("}`, {
+        closeButton: true,
+        richColors: true,
+      });
+			return null;
+		}
+	}
+
+	/// This is so inefficient
+	async getAllHistory(status?: string, category?: string): Promise<ItemMetaData[]> {
+		try {
+			await this.getItemsCount();
+			const sp = new SvelteURLSearchParams();
+
+			sp.set("page", "1");
+			sp.set("limit", String(TOTAL_ITEMS));											// Make the `TOTAL_ITEMS` limit when select all
+
+			if (status && status !== "all") sp.set("status", status);
+			if (category && category !== "everything") sp.set("category", category);
+
+			console.log(`Get all history params: '${sp.toString()}'`)
+			const res = await secureFetch(`/api/qateel/user/history?${sp.toString()}`);
+			if (!res.ok) return [];
+			const json: HistoryResponse = await res.json();
+
+			return json.data ?? [];
+		} catch (e) {
+			console.error("Error fetching all history:", e);
+      const message = this.extractErrorMessage(e)
+      toast.error(`${message ? message : "Failed to get history :("}`, {
+        closeButton: true,
+        richColors: true,
+      });
+			return [];
+		}
+	}
 
   async delete(gids: string[], deleteFile: boolean) {
     try {
@@ -294,10 +403,11 @@ export class Aria2Manager {
 				aria2Store.items = aria2Store.items.filter(i => !gids.includes(i.gid));
 				selectedGids.set([]);
 			}
-			console.log("Data from deletion endpoint:", data)
+			console.log("Deleting:", data)
+
 			await this.getItemsCount();
-      toast.success(`${gids.length === 1 ?
-							"Successfully deleted!!" : `Deleted ${gids.length} items!!`}`, {
+
+      toast.success(`${gids.length === 1 ? "Successfully deleted!!" : `Deleted ${gids.length} items!!`}`, {
         richColors: true,
         style: "cursor: pointer;"
       });
@@ -354,6 +464,7 @@ export class Aria2Manager {
 	/**
 		* Submits finalized tasks to Aria2 after the user
 		* has reviewed the preflight data.
+		* return stuff just see the aria2 proxy
    */
 	async addUris(payload: AddUriReq): Promise<any> {
     if (!payload || payload.tasks.length === 0) return null;
@@ -388,22 +499,32 @@ export class Aria2Manager {
         const task = payload.tasks[index];
         const uri = task?.name ?? `URI: ${index + 1}`;
 
-        if (result?.error) {
-          const message: string = result?.error || "Something went wrong";
-          toast.error(`Failed to add URI  :(`, {
-            description: `${message.replace(/\.$/, "").replace(/--/g, "")}`,
-            richColors: true,
-            style: "cursor: pointer;"
-          });
-        } else {
-          toast.success(`Added to download  :)`, {
-            description: `Name: ${truncateMiddle(uri, 40)}`,
-            richColors: true,
-            style: "cursor: pointer;"
-          });
-					this.getItemsCount();
-        }
+				if (payload.tasks.length < 5) {
+					if (result?.error) {
+						const message: string = result?.error || "Something went wrong";
+						toast.error(`Failed to add URI  :(`, {
+							description: `${message.replace(/\.$/, "").replace(/--/g, "")}`,
+							richColors: true,
+							style: "cursor: pointer;"
+						});
+					} else {
+						toast.success(`Added to download  :)`, {
+							description: `Name: ${truncateMiddle(uri, 40)}`,
+							richColors: true,
+							style: "cursor: pointer;"
+						});
+					}
+				}
       });
+
+			if (payload.tasks.length > 5) {
+				toast.success(`${payload.tasks.length} URIs added to download  :)`, {
+					richColors: true,
+					style: "cursor: pointer;"
+				});
+			}
+
+			await this.getItemsCount();
 
       return resAsJson.data;
     } catch (e) {
@@ -494,7 +615,9 @@ export class Aria2Manager {
       richColors: true,
       style: "cursor: pointer;"
     });
+
 		await this.getItemsCount();
+
     return await res.json();
   }
 
@@ -514,19 +637,6 @@ export class Aria2Manager {
 
 
   /**
-   * Pause ALL active downloads.
-   * @param force If true, uses "aria2.forcePauseAll".
-   */
-  async pauseAll(force = false) {
-    const payload: PauseReq = {
-      pauseAll: !force,
-      forcePauseAll: force
-    };
-    await this.sendPauseRequest(payload);
-  }
-
-
-  /**
    * Internal helper to send the pause command.
    */
 	private async sendPauseRequest(payload: PauseReq) {
@@ -539,29 +649,58 @@ export class Aria2Manager {
 
       if (!res.ok) {
         const err = await res.json();
-        throw new Error(err.error || "Pause action failed");
+        throw new Error(err.error || "Pause action failed.");
       }
 
+      const data = await res.json();
+			/*
+				On success
+				json!({
+					"status": "paused",
+					"method": method,
+					"succeeded": succeeded,				vec string
+					"failed": failed							vec value
+				})
+			*/
       // Determine the toast message context
-      let action = payload.forcePause || payload.forcePauseAll ? "force paused" : "paused";
-      if (payload.pauseAll || payload.forcePauseAll) {
-        action += " all downloads";
-      } else if (payload.gids && payload.gids.length > 1) {
-        action += ` ${payload.gids.length} downloads`;
-      } else {
+      let action = payload.forcePause ? "force paused" : "paused";
+      if (
+				payload.gids
+				&& payload.gids.length > 1
+				&& data?.status === "paused"
+				&& data?.succeeded.length > 1
+			) {
+        action += ` ${data?.succeeded.length} downloads`;
+      } else if (
+				payload.gids
+				&& payload.gids.length === 1
+				&& data?.status === "paused"
+				&& data?.succeeded?.length === 1
+			) {
         action += " download";
       }
 
-      toast.success(`Successfully ${action}!!`, {
-        richColors: true,
-        style: "cursor: pointer;"
-      });
+			if (
+				payload.gids
+				&& payload.gids.length >= 1
+				&& data?.status === "paused"
+				&& data?.failed.length >= 1
+			) {
+				toast.error(`Failed to ${payload.forcePause ? "force pause" : "pause"} ${data?.failed.length} download!!`, {
+					richColors: true,
+					style: "cursor: pointer;"
+				});
+      } else {
+				toast.success(`Successfully ${action}!!`, {
+					richColors: true,
+					style: "cursor: pointer;"
+				});
+			}
 
     } catch (e) {
       console.error(e);
       const message = this.extractErrorMessage(e);
-      toast.error("Failed to pause:", {
-        description: message,
+      toast.error(`${message ? message : "Failed to pause :("}`, {
         richColors: true,
         style: "cursor: pointer;"
       });
@@ -575,17 +714,8 @@ export class Aria2Manager {
    */
 	async resume(gids: string[]) {
     const payload: ResumeReq = {
-      gid: gids
+      gids: gids
     };
-    await this.sendResumeRequest(payload);
-  }
-
-
-  /**
-   * Resume all paused downloads (unpauseAll).
-  */
-	async resumeAll() {
-    const payload: ResumeReq = { resumeAll: true };
     await this.sendResumeRequest(payload);
   }
 
@@ -603,26 +733,56 @@ export class Aria2Manager {
 
       if (!res.ok) {
         const err = await res.json();
-        throw new Error(err.error || "Resume failed");
+        throw new Error(err.error || "Resume failed.");
       }
 
-      let action = "resumed download";
-      if (payload.resumeAll) {
-        action = "resumed all downloads";
-      } else if (payload.gid && payload.gid.length > 1) {
-        action = `resumed ${payload.gid.length} downloads`;
+      const data = await res.json();
+			/*
+				On success
+				json!({
+					"status": "resumed",
+					"method": method,
+					"succeeded": succeeded,				vec string
+					"failed": failed							vec value
+				})
+			*/
+      let action = "resumed";
+      if(
+				payload.gids
+				&& payload.gids.length === 1
+				&& data?.status === "resumed"
+				&& data?.succeeded?.length === 1
+			) {
+        action = `resumed download`;
+			} else if (
+				payload.gids
+				&& payload.gids.length > 1
+				&& data?.status === "resumed"
+				&& data?.succeeded.length > 1
+			) {
+        action = `resumed ${data?.succeeded.length} downloads`;
       }
 
-      toast.success(`Successfully ${action}!!`, {
-        richColors: true,
-        style: "cursor: pointer;"
-      });
-
+			if (
+				payload.gids
+				&& payload.gids.length >= 1
+				&& data?.status === "resumed"
+				&& data?.failed.length >= 1
+			) {
+				toast.error(`Failed to resume ${data?.failed.length} download!!`, {
+					richColors: true,
+					style: "cursor: pointer;"
+				});
+      } else {
+				toast.success(`Successfully ${action}!!`, {
+					richColors: true,
+					style: "cursor: pointer;"
+				});
+			}
     } catch (e) {
       console.error(e);
       const message = this.extractErrorMessage(e);
-      toast.error("Failed to resume:", {
-        description: message,
+      toast.error(`${message ? message : "Failed to resume :("}`, {
         richColors: true,
         style: "cursor: pointer;"
       });
@@ -663,17 +823,27 @@ export class Aria2Manager {
       });
 
       const resAsJson = await res.json().catch(() => null);
-
+			/*
+				On success
+				json!({
+					"status": "stopped",
+					"method": method,
+					"succeeded": succeeded,				vec string
+					"failed": failed							vec value
+				})
+			*/
       if (!res.ok) {
         const message = resAsJson?.error
-					|| resAsJson?.message
-					|| `Failed to add ${payload.gids?.length === 1 ? "URI" : `${payload.gids?.length} URIs`}`;
-        toast.error(message, { richColors: true, style: "cursor: pointer;" });
+					|| `Failed to stop ${payload.gids?.length === 1 ? "URI" : `${payload.gids?.length} URIs`}`;
+        toast.error(message, {
+					richColors: true,
+					style: "cursor: pointer;"
+				});
         throw new Error(resAsJson);
       }
 
       const isForce = payload.forceStop;
-      const count = payload.gids?.length || 0;
+      const count = resAsJson?.succeeded.length || 0;
       const action = isForce ? "Forcefully stopped" : "Stopped";
       const itemLabel = count > 1 ? `${count} downloads` : "download";
 
@@ -682,26 +852,190 @@ export class Aria2Manager {
         style: "cursor: pointer;"
       });
 
-    } catch (e: any) {
-			console.log("Stop error:", e);
-			let errorData: any;
-			try {
-				errorData = JSON.parse(e) || "{}";
-				console.log("errorData:", errorData);
-			} catch {
-				errorData = null;
-			}
-			const failedGids = errorData?.failed
-				? errorData.failed.map((item: any) => item.gid).join(", ")
-				: "Unknown error";
+			if (
+				payload.gids
+				&& payload.gids.length >= 1
+				&& resAsJson?.status === "stopped"
+				&& resAsJson?.failed.length >= 1
+			) {
+				toast.error(`Failed to ${payload.forceStop ? "force stop" : "stop"} ${resAsJson?.failed.length} download!!`, {
+					richColors: true,
+					style: "cursor: pointer;"
+				});
+      }
 
-      toast.error(`${failedGids}:`, {
-				description: failedGids,
+    } catch (e: any) {
+      console.error(e);
+      const message = this.extractErrorMessage(e);
+      toast.error(`${message ? message : "Failed to :("}`, {
         richColors: true,
         style: "cursor: pointer;"
       });
     }
   }
+
+	async stopAll() {
+    try {
+      const res = await secureFetch("/api/qateel/gid/stop/all", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Stop all action failed.");
+      }
+
+      const data = await res.json();
+			/*
+				On success
+			json!({
+				"status": "stoppedAll",
+				"succeeded": successful_gids,
+				"failed": failed
+      })
+			*/
+			let action = "stopped all";
+      if (data?.status === "stoppedAll" && data?.succeeded.length > 1) {
+        action += ` ${data?.succeeded.length} downloads`;
+      } else if (data?.status === "stoppedAll" && data?.succeeded?.length === 1) {
+        action += " download";
+      }
+
+			toast.success(`Successfully ${action}!!`, {
+				richColors: true,
+				style: "cursor: pointer;"
+			});
+
+			if (data?.status === "stoppedAll" && data?.failed.length >= 1) {
+				toast.error(`Failed to stop all ${data?.failed.length} download!!`, {
+					richColors: true,
+					style: "cursor: pointer;"
+				});
+      }
+
+			await this.getItemsCount()
+
+    } catch (e) {
+      console.error(e);
+      const message = this.extractErrorMessage(e);
+      toast.error(`${message ? message : "Failed to stop all :("}`, {
+        richColors: true,
+        style: "cursor: pointer;"
+      });
+    }
+  }
+
+  /**
+   * Pause all `active` and `waiting` downloads
+   */
+	async pauseAll() {
+    try {
+      const res = await secureFetch("/api/qateel/gid/pause/all", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Pause all action failed.");
+      }
+
+      const data = await res.json();
+			/*
+				On success
+				json!({
+					"status": "pausedAll",
+					"succeeded": paused_gids,
+					"failed": failed
+        })
+			*/
+			let action = "paused all";
+      if (data?.status === "pausedAll" && data?.succeeded.length > 1) {
+        action += ` ${data?.succeeded.length} downloads`;
+      } else if (data?.status === "pausedAll" && data?.succeeded?.length === 1) {
+        action += " download";
+      }
+
+			toast.success(`Successfully ${action}!!`, {
+				richColors: true,
+				style: "cursor: pointer;"
+			});
+
+			if (data?.status === "pausedAll" && data?.failed.length >= 1) {
+				toast.error(`Failed to pause all ${data?.failed.length} download!!`, {
+					richColors: true,
+					style: "cursor: pointer;"
+				});
+      }
+
+			await this.getItemsCount()
+
+    } catch (e) {
+      console.error(e);
+      const message = this.extractErrorMessage(e);
+      toast.error(`${message ? message : "Failed to pause :("}`, {
+        richColors: true,
+        style: "cursor: pointer;"
+      });
+    }
+  }
+
+  /**
+   * Resume all `paused` downloads
+   */
+	async resumeAll() {
+    try {
+      const res = await secureFetch("/api/qateel/gid/resume/all", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Pause action failed.");
+      }
+
+      const data = await res.json();
+			/*
+				On success
+				json!({
+					"status": "resumedAll",
+					"succeeded": resumed_gids,
+					"failed": failed
+        })
+			*/
+			let action = "resumed all";
+      if (data?.status === "resumedAll" && data?.succeeded.length > 1) {
+        action += ` ${data?.succeeded.length} downloads`;
+      } else if (data?.status === "resumedAll" && data?.succeeded?.length === 1) {
+        action += " download";
+      }
+
+			toast.success(`Successfully ${action}!!`, {
+				richColors: true,
+				style: "cursor: pointer;"
+			});
+
+			if (data?.status === "resumedAll" && data?.failed.length >= 1) {
+				toast.error(`Failed to resume all ${data?.failed.length} download!!`, {
+					richColors: true,
+					style: "cursor: pointer;"
+				});
+      }
+
+			await this.getItemsCount();
+
+    } catch (e) {
+      console.error(e);
+      const message = this.extractErrorMessage(e);
+      toast.error(`${message ? message : "Failed to resume :("}`, {
+        richColors: true,
+        style: "cursor: pointer;"
+      });
+    }
+  }
+
 
 
   /**
@@ -818,23 +1152,30 @@ export class Aria2Manager {
    * Fetches the items counts based on category
    */
 	// don't wanna map all the static type, keeping it `any`
+	private itemsCountDebouncerTimer: ReturnType<typeof setTimeout> | null = null;
   async getItemsCount(): Promise<void> {
-    try {
-      const res = await secureFetch("/api/qateel/user/items/count");
-      const results = await res.json();
-      if (!res.ok) {
-        const err = results;
-        throw new Error(err.error || "Failed to fetch item counts.");
-      }
-			itemCounts.set(results.data);
-    } catch (e: any) {
-      console.error(e);
-      const message = this.extractErrorMessage(e)
-      toast.error(`${message ? message : "Failed to fetch item counts."}`, {
-        closeButton: true,
-        richColors: true,
-      });
-    }
+		if (this.itemsCountDebouncerTimer) {
+			clearTimeout(this.itemsCountDebouncerTimer);
+		}
+		this.itemsCountDebouncerTimer = setTimeout(async () => {
+			try {
+				const res = await secureFetch("/api/qateel/user/items/count");
+				const results = await res.json();
+				if (!res.ok) {
+					const err = results;
+					throw new Error(err.error || "Failed to fetch item counts.");
+				}
+				itemCounts.set(results.data);
+				TOTAL_ITEMS = results.data.byStatus.all;
+			} catch (e: any) {
+				console.error(e);
+				const message = this.extractErrorMessage(e)
+				toast.error(`${message ? message : "Failed to fetch item counts."}`, {
+					closeButton: true,
+					richColors: true,
+				});
+			}
+		}, 250)
   }
 
   /**
@@ -948,35 +1289,6 @@ export class Aria2Manager {
 		}
 	}
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
   private extractErrorMessage = (value: unknown): string => {
     if (value instanceof Error) {
       return this.extractErrorMessage(value.message);
@@ -1004,6 +1316,205 @@ export class Aria2Manager {
     }
     return "Failed to extract error message";
   };
+
+	async purgeAll() {
+    try {
+      const res = await secureFetch("/api/qateel/purge/all", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Purge all action failed.");
+      }
+
+      const data = await res.json();
+
+      if (data?.status === "purgedAll") {
+				toast.success(`Successfully purged all complete, error, removed downloads!!`, {
+					richColors: true,
+					style: "cursor: pointer;"
+				});
+      }
+
+			await this.getItemsCount();
+
+    } catch (e) {
+      console.error(e);
+      const message = this.extractErrorMessage(e);
+      toast.error(`${message ? message : "Failed to purge :("}`, {
+        richColors: true,
+        style: "cursor: pointer;"
+      });
+    }
+  }
+
+
+  /// Convert incoming `TickTask` to standard `ItemMetaData`
+	private tickTaskToItemMetaData(task: TickTask): ItemMetaData {
+		return {
+			gid: task.gid,
+			name: task.name,
+			kind: task.kind,
+			category: null,
+			status: task.status,
+			dir: task.dir,
+			files: task.files ?? "[]",
+			totalLength: task.totalLength,
+			completedLength: task.completedLength,
+			uploadLength: task.uploadLength,
+			sourceUri: task.sourceUri,
+			infoHash: null,
+			seeder: task.seeder ?? null,
+			contentHash: null,
+			errorCode: null,
+			errorMessage: null,
+			torrent: null,
+			options: null,
+			isResumeSupported: task.isResumeSupported ?? null,
+			numPieces: null,
+			pieceLength: null,
+			verifiedLength: task.verifiedLength ?? null,
+			verifyIntegrityPending: task.verifyIntegrityPending ?? null,
+			createdAt: new SvelteDate().toISOString(),
+			completedAt: null,
+			downloadSpeed: task.downloadSpeed,
+			uploadSpeed: task.uploadSpeed,
+			numSeeders: task.numSeeders ?? null,
+			connections: task.connections ?? null,
+		};
+	}
+
+	/// Check if item matches the active status and category filters
+	private matchesCurrentFilter(item: {
+		status: GidStatus;
+		category?: any;
+		name?: string | null;
+		files?: string | null;
+		kind?: Kind;
+	}): boolean {
+		try {
+			const currentStatus = get(selectedStatus);
+			if (currentStatus && currentStatus !== "all" && item.status !== currentStatus) {
+				return false;
+			}
+
+			const currentCat = get(selectedCategory);
+			if (currentCat && currentCat !== "everything") {
+				const itemCat = getItemCategory(item as ItemMetaData);
+				if (itemCat !== currentCat) {
+					return false;
+				}
+			}
+
+			return true;
+		} catch {
+			return true;
+		}
+	}
+
+	/// Compare two items for sorting
+	private compareItems(a: ItemMetaData, b: ItemMetaData, sortBy: SortBy = "time", order: Order = "desc"): number {
+		let diff = 0;
+		if (sortBy === "name") {
+			const nameA = a.name || a.gid || "";
+			const nameB = b.name || b.gid || "";
+			diff = nameA.localeCompare(nameB, undefined, { sensitivity: "base", numeric: true });
+		} else if (sortBy === "size") {
+			const sizeA = parseInt(a.totalLength || "0", 10) || 0;
+			const sizeB = parseInt(b.totalLength || "0", 10) || 0;
+			diff = sizeA - sizeB;
+		} else {
+			// Time
+			const timeA = a.createdAt ? new SvelteDate(a.createdAt).getTime() : 0;
+			const timeB = b.createdAt ? new SvelteDate(b.createdAt).getTime() : 0;
+			diff = timeA - timeB;
+		}
+
+		return order === "desc" ? -diff : diff;
+	}
+
+	/// Binary search insert to maintain sort order
+	private insertSortedItem(items: ItemMetaData[], newItem: ItemMetaData, sortBy: SortBy = "time", order: Order = "desc") {
+		if (items.some(i => i.gid === newItem.gid)) return;
+
+		let low = 0;
+		let high = items.length;
+
+		while (low < high) {
+			const mid = (low + high) >>> 1;
+			if (this.compareItems(newItem, items[mid], sortBy, order) < 0) {
+				high = mid;
+			} else {
+				low = mid + 1;
+			}
+		}
+
+		items.splice(low, 0, newItem);
+	}
+
+	/**
+		* Calculates the ETA and returns it as a formatted string
+		*/
+	calculateETA(
+		item: ItemMetaData
+	): string {
+		const speedHistoryCache = new WeakMap<ItemMetaData, SpeedRecord[]>();
+		const totalBytes = item.totalLength ? parseInt(item.totalLength, 10) : 0;
+		const completedBytes = item.completedLength ? parseInt(item.completedLength, 10) : 0;
+		const speedBytesPerSec = item.downloadSpeed ? parseInt(item.downloadSpeed, 10) : 0;
+
+		const remaining = totalBytes - completedBytes;
+		// Immediate termination logic for edge cases
+		if (remaining <= 0) return "0s";
+
+		// Initialize or retrieve the history array
+		if (!speedHistoryCache.has(item)) {
+			speedHistoryCache.set(item, []);
+		}
+		const history = speedHistoryCache.get(item)!;
+
+		const now = Date.now();
+		history.push({ timestamp: now, speed: speedBytesPerSec });
+
+		// Maintain the 10 sec history window
+		const cutoff = now - 10000;
+		while (history.length > 0 && history[0].timestamp < cutoff) {
+			history.shift();
+		}
+
+		const totalSpeed = history.reduce((sum, entry) => sum + entry.speed, 0);
+		const averageSpeed = totalSpeed / history.length;
+
+		if (averageSpeed <= 0) return "";
+
+		const totalSeconds = Math.round(remaining / averageSpeed);
+
+		const MINUTE = 60;
+		const HOUR = 3600;
+		const DAY = 86400;
+
+		if (totalSeconds >= DAY) {
+			const days = Math.floor(totalSeconds / DAY);
+			const hours = Math.floor((totalSeconds % DAY) / HOUR);
+			return hours > 0 ? `${days}d ${hours}h` : `${days}day`;
+		}
+
+		if (totalSeconds >= HOUR) {
+			const hours = Math.floor(totalSeconds / HOUR);
+			const mins = Math.floor((totalSeconds % HOUR) / MINUTE);
+			return mins > 0 ? `${hours}h ${mins}m` : `${hours}hour`;
+		}
+
+		if (totalSeconds >= MINUTE) {
+			const mins = Math.floor(totalSeconds / MINUTE);
+			const secs = totalSeconds % MINUTE;
+			return secs > 0 ? `${mins}m ${secs}s` : `${mins}min`;
+		}
+
+		return `${totalSeconds}sec`;
+	}
 }
 
 export const aria2 = new Aria2Manager();

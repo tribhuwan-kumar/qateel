@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { mode } from "mode-watcher";
-	import { onMount, tick } from "svelte";
-	import type { ItemMetaData, GidStatus } from "$lib/aria2/types";
+	import { onMount, untrack } from "svelte";
+	import type { ItemMetaData } from "$lib/aria2/types";
 	import { Badge } from "$lib/components/ui/badge";
 	import { HugeiconsIcon } from "@hugeicons/svelte";
 	import { Button } from "$lib/components/ui/button";
@@ -14,11 +14,14 @@
 	import * as PopoverTooltip from '$lib/components/ui/popovertooltip';
 	import { formatSpeed, formatBytes } from "$lib/utils";
 	import { useSidebar } from "$lib/components/ui/sidebar";
+	import { historySort } from "$lib/sort";
 	import {
+		statusFilters,
 		downloadIcons,
-		getItemCategory,
 		selectedCategory,
-		getDownloadIconName
+		selectedStatus,
+		getDownloadIconName,
+		type TableStatusFilter,
 	} from "$lib/categorize";
 	import {
 		BadgeInfoIcon,
@@ -28,70 +31,78 @@
 		MoreVerticalCircle01Icon
 	} from "@hugeicons/core-free-icons";
 	import { aria2, aria2Store, itemCounts } from "$lib/aria2/client.svelte";
-	import { selectedGids, clearSelection, toggleSelection, selectExclusive } from "$lib/selection";
-
-	type TableStatusFilter = "all" | GidStatus;
-	const statusFilters: TableStatusFilter[] = ["all", "active", "paused", "waiting", "complete", "seeding", "removed", "stopped", "error"];
-	let selectedStatus = $state<TableStatusFilter>("all");
+	import {
+		selectedGids,
+			selectedTotalBytes,
+			isActivelySelecting,
+			clearSelection,
+			toggleSelection,
+			selectExclusive,
+			setSelection
+	} from "$lib/selection";
+	import Virtual from '$lib/components/Virtual.svelte';
 
 	/// Some state varibables
+  const PAGE_LIMIT = 25;
+	const ITEM_STRIDE = 75; // 75px per row
+
 	let currentPage = $state(1);
 	let totalPages = $state(1);
 	let loading = $state(false);
 	let hasMore = $state(true);
+  let mounted = false;
 	let isDarkMode = $state(false);
 	let isSidebarOpen = $state(false);
+  let currentFetchId = 0;
 
 	// Fade effect
 	let statusScrollContainer: HTMLDivElement | null = $state(null);
 	let statusShowLeftFade = $state(false);
 	let statusShowRightFade = $state(false);
 
-	/// For deleting
+	// Deletion state
 	let deleteDialogOpen = $state(false);
 	let deleteWithFiles = $state(false);
 	let gidsToDelete: string[] = $state([]);
 
-	/// Infinity scroll
-	const AUTO_SCROLL_MARGIN = 64;
-	const AUTO_SCROLL_MAX_SPEED = 18;
-	let sentinel: HTMLDivElement | null = $state(null);
-	let infiniteObserver: IntersectionObserver | null = $state(null);
-	let autoScrollFrame: number | null = $state(null);
-
-	/// Drag and select
+	// Desktop Drag & Select
 	const DRAG_THRESHOLD = 4;
-	let dragSelecting = $state(false);
-	let lastDragSelectionKey = $state("");
 	let dragArmed = $state(false);
+	let dragSelecting = $state(false);
 	let dragStart = $state({ x: 0, y: 0 });
 	let dragCurrent = $state({ x: 0, y: 0 });
-	let dragStartPage = $state({ x: 0, y: 0 });
-	let suppressNextClick = $state(false);
-	let tableContainer: HTMLDivElement | null = $state(null);
+	let dragStartContentY = 0;
+	let dragWithModifier = false;
+	let initialDragSelection: Array<{ gid: string; totalLength: string | null }> = [];
+	let lastDragSelectionKey = "";
+	let suppressNextClick = false;
 
-	/// Showing categorized items
-	let visibleItems = $derived(
-		aria2Store.items.filter(
-			(item) =>
-				($selectedCategory === "everything" || getItemCategory(item) === $selectedCategory) &&
-				(selectedStatus === "all" || item.status === selectedStatus)
-		)
-	);
+	// Mobile Long-Press & Drag Select
+	let mobileLongPressTimer: ReturnType<typeof setTimeout> | null = null;
+	let isMobileDragSelecting = $state(false);
+	let mobileAnchorIndex = -1;
+	let touchStartPos = { x: 0, y: 0 };
+
+	// Auto-scroll during drag
+	const AUTO_SCROLL_MARGIN = 64;
+	const AUTO_SCROLL_MAX_SPEED = 18;
+	let autoScrollFrame: number | null = null;
+	let virtualViewport = $state<HTMLDivElement | null>(null);
+	let tableContainer = $state<HTMLDivElement | null>(null);
+
+	let visibleItems = $derived(aria2Store.items);
 
 	/// Selection by clicks and ctrlkey
-	function handleRowClick(event: MouseEvent, gid: string) {
+	function handleRowClick(event: MouseEvent, item: ItemMetaData) {
 		if (suppressNextClick) {
 			suppressNextClick = false;
 			return;
 		}
-
-		if ((event.target as HTMLElement).closest("button, a")) return;
-
-		if (event.ctrlKey || event.metaKey) {
-			toggleSelection(gid);
+		if ((event.target as HTMLElement).closest("button, a, input")) return;
+		if (event.ctrlKey || event.metaKey || $selectedGids.length > 0) {
+			toggleSelection(item.gid, item.totalLength);
 		} else {
-			selectExclusive(gid);
+			selectExclusive(item.gid, item.totalLength);
 		}
 	}
 
@@ -207,6 +218,12 @@
 		return isDarkMode ? downloadIcons[name].dark : downloadIcons[name].light;
 	}
 
+	/// Select status
+	function selectStatus(status: TableStatusFilter) {
+		selectedStatus.set(status);
+		clearSelection();
+	}
+
 	/// Server actions, deletion
 	function promptDelete(gids: string[]) {
 		if (gids.length === 0) return;
@@ -241,66 +258,71 @@
 	}
 
 	/// Drag selection
-	function getDragRect() {
-		const currentPage = {
-			x: dragCurrent.x + window.scrollX,
-			y: dragCurrent.y + window.scrollY
-		};
-
-		return {
-			left: Math.min(dragStartPage.x, currentPage.x),
-			right: Math.max(dragStartPage.x, currentPage.x),
-			top: Math.min(dragStartPage.y, currentPage.y),
-			bottom: Math.max(dragStartPage.y, currentPage.y)
-		};
-	}
-
-	function getVisibleRowGids() {
-		if (!tableContainer) return [];
-
-		return Array.from(tableContainer.querySelectorAll<HTMLElement>("[data-row-gid]"))
-			.map((el) => el.dataset.rowGid)
-			.filter((gid): gid is string => Boolean(gid));
-	}
-
-	function applySelection(gids: string[]) {
-		clearSelection();
-
-		for (const gid of gids) {
-			toggleSelection(gid);
+	async function selectAllDbItems() {
+		if (visibleItems.length === 0) return;
+		// Fetch all matching items from DB for current status & category
+		const allItems = await aria2.getAllHistory($selectedStatus, $selectedCategory);
+		if (allItems.length > 0) {
+			setSelection(allItems.map((i) => ({ gid: i.gid, totalLength: i.totalLength })));
+		} else {
+			setSelection(visibleItems.map((i) => ({ gid: i.gid, totalLength: i.totalLength })));
 		}
 	}
 
+	function isEditableTarget(target: EventTarget | null): boolean {
+		if (!(target instanceof HTMLElement)) return false;
+		return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+	}
+
+	function handleKeyDown(event: KeyboardEvent) {
+		const key = event.key.toLowerCase();
+		if ((event.ctrlKey || event.metaKey) && key === "a") {
+			if (isEditableTarget(event.target)) return;
+			event.preventDefault();
+			void selectAllDbItems();
+		}
+	}
+
+	function getStatusCount(status: TableStatusFilter): number {
+		const counts = $itemCounts;
+		if (!counts) return 0;
+		if (status === "all") return counts.byCategory?.everything ?? 0;
+		return counts.byStatus?.[status] ?? 0;
+	}
+
+	/// Desktop: drag & select
 	function updateDragSelection() {
-		if (!dragSelecting || !tableContainer) return;
+		if (!dragSelecting || !virtualViewport || visibleItems.length === 0) return;
 
-		const rect = getDragRect();
+		const currentViewportRect = virtualViewport.getBoundingClientRect();
+		const currentContentY = dragCurrent.y - currentViewportRect.top + virtualViewport.scrollTop;
 
-		const selected = getVisibleRowGids().filter((gid) => {
-			const el = tableContainer?.querySelector<HTMLElement>(`[data-row-gid="${CSS.escape(gid)}"]`);
-			if (!el) return false;
+		const minY = Math.max(0, Math.min(dragStartContentY, currentContentY));
+		const maxY = Math.max(dragStartContentY, currentContentY);
 
-			const rowRect = el.getBoundingClientRect();
-			const rowPageRect = {
-				left: rowRect.left + window.scrollX,
-				right: rowRect.right + window.scrollX,
-				top: rowRect.top + window.scrollY,
-				bottom: rowRect.bottom + window.scrollY
-			};
+		const fromIndex = Math.max(0, Math.floor(minY / ITEM_STRIDE));
+		const toIndex = Math.min(visibleItems.length - 1, Math.floor(maxY / ITEM_STRIDE));
 
-			return !(
-				rowPageRect.right < rect.left ||
-				rowPageRect.left > rect.right ||
-				rowPageRect.bottom < rect.top ||
-				rowPageRect.top > rect.bottom
-			);
-		});
+		if (fromIndex > toIndex) return;
 
-		const selectionKey = selected.join("\u0000");
-		if (selectionKey === lastDragSelectionKey) return;
+		const rangeKey = `${fromIndex}:${toIndex}:${dragWithModifier}`;
+		if (rangeKey === lastDragSelectionKey) return;
+		lastDragSelectionKey = rangeKey;
 
-		lastDragSelectionKey = selectionKey;
-		applySelection(selected);
+		const rangeItems = visibleItems.slice(fromIndex, toIndex + 1);
+
+		if (dragWithModifier) {
+			const combined = [...initialDragSelection];
+			const seen = new Set(combined.map((i) => i.gid));
+			for (const item of rangeItems) {
+				if (!seen.has(item.gid)) {
+					combined.push({ gid: item.gid, totalLength: item.totalLength });
+				}
+			}
+			setSelection(combined);
+		} else {
+			setSelection(rangeItems.map((i) => ({ gid: i.gid, totalLength: i.totalLength })));
+		}
 	}
 
 	function handleDragMove(event: MouseEvent) {
@@ -310,12 +332,9 @@
 		const dy = Math.abs(event.clientY - dragStart.y);
 
 		if (!dragSelecting) {
-			if (dx < DRAG_THRESHOLD && dy < DRAG_THRESHOLD) {
-				return;
-			}
-
+			if (dx < DRAG_THRESHOLD && dy < DRAG_THRESHOLD) return;
 			dragSelecting = true;
-			clearSelection();
+			isActivelySelecting.set(true);
 			startAutoScroll();
 		}
 
@@ -330,116 +349,119 @@
 
 		dragArmed = false;
 		dragSelecting = false;
+		isActivelySelecting.set(false); // <--- Signal drag end
 		lastDragSelectionKey = "";
 		stopAutoScroll();
 
 		window.removeEventListener("mousemove", handleDragMove, true);
 		window.removeEventListener("mouseup", handleDragEnd, true);
-		window.removeEventListener("contextmenu", handleDragContextMenu, true);
-	}
-
-	function handleDragContextMenu(event: MouseEvent) {
-		if (dragSelecting) {
-			event.preventDefault();
-		}
+		window.removeEventListener("blur", handleDragEnd);
 	}
 
 	function handleSelectionMouseDown(event: MouseEvent) {
-		if (event.button !== 0) return;
-
+		if (event.button !== 0 || !virtualViewport) return;
 		const target = event.target as HTMLElement | null;
-		if (!target) return;
-
-		if (target.closest('button, a, input, textarea, select, [role="menuitem"]')) {
-			return;
-		}
-
-		event.preventDefault();
-		event.stopPropagation();
-
+		if (!target || target.closest('button, a, input, textarea, select, [role="menuitem"]')) return;
+		const viewportRect = virtualViewport.getBoundingClientRect();
 		dragArmed = true;
 		dragSelecting = false;
 		dragStart = { x: event.clientX, y: event.clientY };
 		dragCurrent = { x: event.clientX, y: event.clientY };
-		dragStartPage = {
-			x: event.clientX + window.scrollX,
-			y: event.clientY + window.scrollY
-		};
+		dragStartContentY = event.clientY - viewportRect.top + virtualViewport.scrollTop;
+		dragWithModifier = event.ctrlKey || event.metaKey || event.shiftKey;
+
+		initialDragSelection = visibleItems
+			.filter((i) => $selectedGids.includes(i.gid))
+			.map((i) => ({ gid: i.gid, totalLength: i.totalLength }));
+
 		lastDragSelectionKey = "";
 
 		window.addEventListener("mousemove", handleDragMove, true);
 		window.addEventListener("mouseup", handleDragEnd, true);
-		window.addEventListener("scroll", handleWindowScroll, true);
-		window.addEventListener("contextmenu", handleDragContextMenu, true);
-
-		updateDragSelection();
+		window.addEventListener("blur", handleDragEnd);
 	}
 
-	/// A little refresh fn
-	async function refresh(page = 1) {
-		if (loading || (!hasMore && page !== 1)) return;
+	/// Mobile long-press and drag-select
+	function handleTouchStart(e: TouchEvent) {
+		if (e.touches.length !== 1 || !virtualViewport) return;
+		const touch = e.touches[0];
+		touchStartPos = { x: touch.clientX, y: touch.clientY };
 
-		loading = true;
-		try {
-			const json = await aria2.loadInitialData(page);
-			if (json?.meta) {
-				currentPage = json.meta.currentPage;
-				totalPages = json.meta.totalPages;
-				hasMore = json.meta.hasMore;
+		const rowEl = (e.target as HTMLElement).closest("[data-row-gid]") as HTMLElement | null;
+		if (!rowEl) return;
+
+		const gid = rowEl.dataset.rowGid;
+		const itemIndex = visibleItems.findIndex((i) => i.gid === gid);
+		if (itemIndex === -1) return;
+
+		if (mobileLongPressTimer) clearTimeout(mobileLongPressTimer);
+
+		mobileLongPressTimer = setTimeout(() => {
+			// Trigger haptic feedback if supported
+			if (typeof navigator !== "undefined" && navigator.vibrate) {
+				navigator.vibrate(40);
 			}
-		} finally {
-			loading = false;
-		}
-		clearSelection();
-		loading = false;
+
+			isMobileDragSelecting = true;
+			isActivelySelecting.set(true);
+			mobileAnchorIndex = itemIndex;
+			suppressNextClick = true;
+			dragCurrent = { x: touch.clientX, y: touch.clientY };
+
+			const targetItem = visibleItems[itemIndex];
+			if (targetItem) {
+				toggleSelection(targetItem.gid, targetItem.totalLength);
+			}
+
+			// Add non-passive listeners so e.preventDefault() stops the mobile browser from cancelling touch
+			window.addEventListener("touchmove", handleActiveTouchMove, { passive: false });
+			window.addEventListener("touchend", handleActiveTouchEnd);
+			window.addEventListener("touchcancel", handleActiveTouchEnd);
+
+			startAutoScroll();
+		}, 400);
 	}
 
-	/// Infinite scroll
-	async function loadNextPage() {
-		if (loading || !hasMore) return;
+	function handleActiveTouchMove(e: TouchEvent) {
+		if (!isMobileDragSelecting || e.touches.length !== 1 || !virtualViewport) return;
 
-		loading = true;
-		try {
-			const json = await aria2.loadInitialData(currentPage + 1);
-			if (json?.meta) {
-				currentPage = json.meta.currentPage;
-				totalPages = json.meta.totalPages;
-				hasMore = json.meta.hasMore ?? currentPage < totalPages;
-			} else {
-				hasMore = false;
-			}
-		} finally {
-			loading = false;
-		}
+		e.preventDefault();
+		e.stopPropagation();
+
+		const touch = e.touches[0];
+		dragCurrent = { x: touch.clientX, y: touch.clientY };
+		updateMobileTouchSelection(touch.clientY);
 	}
 
-	function setupInfiniteObserver() {
-		if (typeof IntersectionObserver === "undefined" || !sentinel) return;
+	function updateMobileTouchSelection(clientY: number) {
+		if (!virtualViewport || mobileAnchorIndex === -1 || visibleItems.length === 0) return;
 
-		infiniteObserver?.disconnect();
-
-		infiniteObserver = new IntersectionObserver(
-			(entries) => {
-				if (entries[0]?.isIntersecting && hasMore && !loading) {
-					void loadNextPage();
-				}
-			},
-			{
-				root: null,
-				rootMargin: "200px 0px",
-				threshold: 0.1
-			}
+		const viewportRect = virtualViewport.getBoundingClientRect();
+		const contentY = clientY - viewportRect.top + virtualViewport.scrollTop;
+		const currentIndex = Math.max(
+			0,
+			Math.min(visibleItems.length - 1, Math.floor(contentY / ITEM_STRIDE))
 		);
 
-		infiniteObserver.observe(sentinel);
+		const fromIndex = Math.min(mobileAnchorIndex, currentIndex);
+		const toIndex = Math.max(mobileAnchorIndex, currentIndex);
+
+		const rangeItems = visibleItems.slice(fromIndex, toIndex + 1);
+		setSelection(rangeItems.map((i) => ({ gid: i.gid, totalLength: i.totalLength })));
 	}
 
-	async function ensureScrollable() {
-		await tick();
+	function handleActiveTouchEnd() {
+		if (mobileLongPressTimer) clearTimeout(mobileLongPressTimer);
 
-		while (hasMore && sentinel && sentinel.getBoundingClientRect().top <= window.innerHeight) {
-			await loadNextPage();
-			await tick();
+		window.removeEventListener("touchmove", handleActiveTouchMove);
+		window.removeEventListener("touchend", handleActiveTouchEnd);
+		window.removeEventListener("touchcancel", handleActiveTouchEnd);
+
+		if (isMobileDragSelecting) {
+			isMobileDragSelecting = false;
+      isActivelySelecting.set(false);
+			mobileAnchorIndex = -1;
+			stopAutoScroll();
 		}
 	}
 
@@ -447,26 +469,33 @@
 		if (autoScrollFrame !== null) return;
 
 		const step = () => {
-			if (!dragSelecting) {
+			if (!dragSelecting && !isMobileDragSelecting) {
 				stopAutoScroll();
 				return;
 			}
 
 			let deltaY = 0;
-			const topEdge = AUTO_SCROLL_MARGIN;
-			const bottomEdge = window.innerHeight - AUTO_SCROLL_MARGIN;
+			if (virtualViewport) {
+				const rect = virtualViewport.getBoundingClientRect();
+				const topEdge = rect.top + AUTO_SCROLL_MARGIN;
+				const bottomEdge = rect.bottom - AUTO_SCROLL_MARGIN;
 
-			if (dragCurrent.y < topEdge) {
-				const ratio = (topEdge - dragCurrent.y) / AUTO_SCROLL_MARGIN;
-				deltaY = -Math.ceil(ratio * AUTO_SCROLL_MAX_SPEED);
-			} else if (dragCurrent.y > bottomEdge) {
-				const ratio = (dragCurrent.y - bottomEdge) / AUTO_SCROLL_MARGIN;
-				deltaY = Math.ceil(ratio * AUTO_SCROLL_MAX_SPEED);
-			}
+				if (dragCurrent.y < topEdge) {
+					const ratio = Math.min(1, (topEdge - dragCurrent.y) / AUTO_SCROLL_MARGIN);
+					deltaY = -Math.ceil(ratio * AUTO_SCROLL_MAX_SPEED);
+				} else if (dragCurrent.y > bottomEdge) {
+					const ratio = Math.min(1, (dragCurrent.y - bottomEdge) / AUTO_SCROLL_MARGIN);
+					deltaY = Math.ceil(ratio * AUTO_SCROLL_MAX_SPEED);
+				}
 
-			if (deltaY !== 0) {
-				window.scrollBy({ top: deltaY, left: 0, behavior: "auto" });
-				updateDragSelection();
+				if (deltaY !== 0) {
+					virtualViewport.scrollBy({ top: deltaY, left: 0, behavior: "auto" });
+					if (isMobileDragSelecting) {
+						updateMobileTouchSelection(dragCurrent.y);
+					} else if (dragSelecting) {
+						updateDragSelection();
+					}
+				}
 			}
 
 			autoScrollFrame = requestAnimationFrame(step);
@@ -482,70 +511,126 @@
 		}
 	}
 
-	function handleWindowScroll() {
-		if (dragSelecting) {
-			updateDragSelection();
-		}
-	}
-
-function handleStatusScrollState() {
+	function handleStatusScrollState() {
 		if (!statusScrollContainer) return;
-		// Disable fading on screens wider than 'sm' breakpoint (640px)
 		if (window.innerWidth >= 640) {
 			statusShowLeftFade = false;
 			statusShowRightFade = false;
 			return;
 		}
 		const { scrollLeft, scrollWidth, clientWidth } = statusScrollContainer;
-		const hasOverflow = scrollWidth > clientWidth;
-		if (!hasOverflow) {
-			statusShowLeftFade= false;
-			statusShowRightFade = false;
-			return;
-		}
-		// Proximity calculations with 2px buffer
 		statusShowLeftFade = scrollLeft > 2;
 		statusShowRightFade = scrollLeft + clientWidth < scrollWidth - 2;
 	}
 
-	$effect(() => {
-		if (sentinel) {
-			void tick().then(() => setupInfiniteObserver());
+	/// A little refresh fn
+	async function refresh(page = 1) {
+		const fetchId = ++currentFetchId;
+		loading = true;
+
+		try {
+			const json = await aria2.getHistory({
+				page,
+				limit: PAGE_LIMIT,
+				status: $selectedStatus,
+				category: $selectedCategory,
+				sortBy: $historySort.sortBy,
+				order: $historySort.order
+			});
+
+			if (fetchId !== currentFetchId) return;
+
+			if (json?.meta) {
+				currentPage = json.meta.currentPage;
+				totalPages = json.meta.totalPages;
+				hasMore = json.meta.hasMore ?? currentPage < totalPages;
+			} else {
+				hasMore = false;
+			}
+		} catch (e) {
+			console.error("Refresh error:", e);
+		} finally {
+			if (fetchId === currentFetchId) {
+				loading = false;
+			}
 		}
+		clearSelection();
+	}
+
+	/// Load next page when virtual list scrolls near bottom, infinite scroll
+	async function loadNextPage() {
+		if (loading || !hasMore) return;
+		const fetchId = currentFetchId;
+		loading = true;
+
+		try {
+			const nextPage = currentPage + 1;
+			const json = await aria2.getHistory({
+				page: nextPage,
+				limit: PAGE_LIMIT,
+				status: $selectedStatus,
+				category: $selectedCategory,
+				sortBy: $historySort.sortBy,
+				order: $historySort.order
+			});
+
+			if (fetchId !== currentFetchId) return;
+
+			if (json?.meta) {
+				currentPage = json.meta.currentPage;
+				totalPages = json.meta.totalPages;
+				hasMore = json.meta.hasMore ?? currentPage < totalPages;
+			} else {
+				hasMore = false;
+			}
+		} catch (e) {
+			console.error("Error loading next page:", e);
+		} finally {
+			if (fetchId === currentFetchId) {
+				loading = false;
+			}
+		}
+	}
+
+	$effect(() => {
+			const sidebar = useSidebar();
 		const savedMode = localStorage.getItem("mode-watcher-mode");
-		if (mode.current === "dark" || savedMode === "dark") {
-			isDarkMode = true;
+		isDarkMode = mode.current === "dark" || savedMode === "dark";
+		if (sidebar.open === true) {
+			isSidebarOpen = true;
 		} else {
-			isDarkMode = false;
+			isSidebarOpen = false;
 		}
 		handleStatusScrollState();
+	});
 
-		const sidebar = useSidebar();
-		console.log("SIDEBAR: ", sidebar.open)
-		if(sidebar.open === true) {
-			isSidebarOpen = true
-		} else {
-			isSidebarOpen = false
-		}
+	$effect(() => {
+		const _status = $selectedStatus;
+		const _cat = $selectedCategory;
+		const _sort = $historySort;
+		if (!mounted) return;
 
+		untrack(() => {
+			currentPage = 1;
+			hasMore = true;
+			if (virtualViewport) virtualViewport.scrollTop = 0;
+			void refresh(1);
+		});
 	});
 
 	onMount(() => {
-		aria2.connectDdlWs();
+		mounted = true;
+		aria2.connectDlWs();
 		aria2.connectGlobalStatWs();
-		window.addEventListener("scroll", handleWindowScroll, true);
+		window.addEventListener("keydown", handleKeyDown, true);
 
-		void tick().then(() => setupInfiniteObserver());
-		void refresh(1).then(() => ensureScrollable());
+		void refresh(1);
 
 		return () => {
-			window.removeEventListener("scroll", handleWindowScroll, true);
+			window.removeEventListener("keydown", handleKeyDown, true);
 			stopAutoScroll();
-			window.removeEventListener("mousemove", handleDragMove, true);
-			window.removeEventListener("mouseup", handleDragEnd, true);
-			window.removeEventListener("contextmenu", handleDragContextMenu, true);
-			infiniteObserver?.disconnect();
-			infiniteObserver = null;
+			handleActiveTouchEnd();
+			handleDragEnd();
 		};
 	});
 </script>
@@ -554,8 +639,8 @@ function handleStatusScrollState() {
 	<div
 		class="h-12 border-t bg-card/95 backdrop-blur z-1 supports-backdrop-filter:bg-card/60
 			border-l w-[-moz-available] w-[-webkit-fill-available] scrollbar-none border-r top-18 my-0 sticky inline-block overflow-x-scroll
-			max-sm:mx-2 mx-6 md:mx-10 rounded-t-2xl
-	">
+			max-sm:mx-2 mx-6 md:mx-10 rounded-t-2xl"
+		>
 	<div
 			bind:this={statusScrollContainer}
 			onscroll={handleStatusScrollState}
@@ -567,407 +652,88 @@ function handleStatusScrollState() {
 			<div class="h-full max-sm:w-[700px] flex justify-around items-center">
 				{#each statusFilters as status, i (status)}
 					<button
+						onclick={() => selectStatus(status)}
 						type="button"
-						onclick={() => {
-							selectedStatus = status;
-							clearSelection();
-						}}
 						class={`text-[14px] w-full h-full flex flex-col items-center justify-center font-medium transition-colors cursor-pointer
 							${i !== statusFilters.length - 1 ? "border-r" : ""}
-							${selectedStatus === status ? "bg-[#DDA0DD]/30" : ""}
+							${$selectedStatus === status ? "bg-[#DDA0DD]/30" : ""}
 							${i === 0 ? "rounded-tl-[14px]" : ""}
 							${i === statusFilters.length - 1 ? "rounded-tr-[14px]" : ""}`}
 					>
-						{status.charAt(0).toUpperCase() + status.slice(1)}
-						{#if $itemCounts?.byCategory.everything > 20}
-							<span class="text-[10px]">{`{0}`}</span>
+						{status?.charAt(0).toUpperCase() + status.slice(1)}
+						{#if $itemCounts?.byCategory.everything > 15}
+							<span class="text-[10px]">{`{${getStatusCount(status)}}`}</span>
 						{/if}
 					</button>
 				{/each}
 			</div>
 		</div>
 	</div>
+
+	<!-- Main table container with desktop drag & Mobile touch-drag -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions  -->
 	<div
-		role="button"
-		tabindex="0"
+		role="region"
+		aria-label="Downloads Table"
 		bind:this={tableContainer}
 		onmousedown={handleSelectionMouseDown}
+		ontouchstart={handleTouchStart}
+		ontouchmove={(e) => {
+			if (!isMobileDragSelecting && mobileLongPressTimer) {
+				const touch = e.touches[0];
+				if (touch) {
+					const dx = Math.abs(touch.clientX - touchStartPos.x);
+					const dy = Math.abs(touch.clientY - touchStartPos.y);
+					if (dx > 10 || dy > 10) {
+						clearTimeout(mobileLongPressTimer);
+						mobileLongPressTimer = null;
+					}
+				}
+			}
+		}}
+		ontouchend={() => {
+			if (mobileLongPressTimer) clearTimeout(mobileLongPressTimer);
+		}}
+		ontouchcancel={() => {
+			if (mobileLongPressTimer) clearTimeout(mobileLongPressTimer);
+		}}
 		class="border bg-card select-none max-sm:mx-2 mx-6 md:mx-10"
+		class:touch-none={isMobileDragSelecting}
 	>
-		<table class="w-full">
-			<tbody>
-				{#each visibleItems as item (item.gid)}
-					<tr
-						data-row-gid={item.gid}
-						onclick={(e) => handleRowClick(e, item.gid)}
-						data-selected={$selectedGids.includes(item.gid)}
-						style={getRowStyle(item)}
-						class="cursor-pointer h-[75px] max-h-fit bg-blend-darken transition-colors hover:bg-muted/50 data-[selected=true]:bg-[#DDA0DD]/40 border-xl"
-					>
-						<td class="xs:w-12 xs:h-16 h-[inherit] w-8
-							flex justify-center items-center">
-							<img
-								src={getIcon(item)}
-								alt="svg-icon"
-								aria-hidden="true"
-								class="w-5 sm:w-7 xs:w-6 shrink-0"
-							/>
-						</td>
-						<td class="lg:min-w-[70%]">
-							<div class="flex flex-col min-h-10 justify-center w-full">
-								<!-- // visible till xs -->
-								<span
-									title={item.name || item.gid}
-									class="font-medium block xs:hidden text-[13px] float-left max-w-[100%]"
-								>
-									{(item.name?.length ?? 0) > 15 ? `${item.name?.slice(0, 25)}...${item.name?.slice(-6)}` : item.name || "<Untitled>"}
-								</span>
-								<!-- // visible till sm -->
-								<span
-									title={item.name || item.gid}
-									class="font-medium block max-xs:hidden sm:hidden text-[14px] float-left"
-								>
-									{(item.name?.length ?? 0) > 30 ? `${item.name?.slice(0, 30)}...${item.name?.slice(-4)}` : item.name || "<Untitled>"}
-								</span>
-								<!-- // visible between upper xs and md -->
-								<span
-									title={item.name || item.gid}
-									class="font-medium block max-sm:hidden md:hidden text-[14px] float-left"
-								>
-									{(item.name?.length ?? 0) > 40 ? `${item.name?.slice(0, 40)}...${item.name?.slice(-8)}` : item.name || "<Untitled>"}
-								</span>
-								<!-- // visible on upper md -->
-								<span
-									title={item.name || item.gid}
-									class="font-medium hidden md:block text-[16px] float-left"
-								>
-									{(item.name?.length ?? 0) > 50 ? `${item.name?.slice(0, 50)}...${item.name?.slice(-8)}` : item.name || "<Untitled>"}
-								</span>
-
-								{#if item.status === "error"}
-									<div class="flex items-center mt-0.5 text-[12px] text-muted-foreground gap-2">
-										<span
-											class="flex items-center md:font-medium gap-0.5 text-[12px] text-destructive max-w-[300px]"
-										>
-											<span class="flex items-center">
-												<span class="sm:hidden">
-													{#if item.status && item.status !== null}
-														{item.status.charAt(0).toUpperCase() + item.status.slice(1)} &nbsp; | &nbsp;
-													{/if}
-												</span>
-												{#if item.completedLength && item.completedLength !== "0"}
-													{getPercentage(item.completedLength!, item.totalLength!)} &nbsp; | &nbsp;
-												{/if}
-												{#if item.completedLength && item.completedLength !== "0"}
-													{formatBytes(item.completedLength)}
-												{/if}
-												{#if item.totalLength && item.totalLength !== "0"}
-													{formatBytes(item.totalLength)}
-												{/if}
-												{#if item.uploadLength && item.uploadLength !== "0"}
-													&nbsp; | &nbsp;
-													<HugeiconsIcon
-														icon={CloudUploadIcon}
-														size={15}
-														color="currentColor"
-														strokeWidth={1.5}
-														class="mx-0.5"
-													/>
-													{formatBytes(item.uploadLength)}
-												{/if}
-											</span>
-										</span>
-									</div>
-								{:else}
-									<div class="flex items-center text-[12px] text-muted-foreground gap-2 mt-1">
-										{#if (item.completedLength && item.completedLength !== "0") || item.totalLength !== "0"}
-											<div class="max-sm:hidden flex md:font-medium tracking-wide items-center gap-0.5">
-												{#if item.completedLength && item.completedLength !== "0"}
-													<span>
-														{getPercentage(item.completedLength!, item.totalLength!)}
-														&nbsp; | &nbsp;
-													</span>
-												{/if}
-												{#if item.completedLength && item.completedLength !== "0"}
-													<span>
-														{formatBytes(item.completedLength)}
-													</span>
-												{/if}
-												{#if item.totalLength && item.totalLength !== "0"}
-													<span>
-														{`${item.completedLength && item.completedLength !== "0" ? "/" : ""} ${formatBytes(item.totalLength)}`}
-													</span>
-												{/if}
-												{#if item.uploadLength && item.uploadLength !== "0"}
-													<span class="flex flex-row items-center">
-														&nbsp; | &nbsp;
-														<HugeiconsIcon
-															icon={CloudUploadIcon}
-															size={15}
-															color="currentColor"
-															strokeWidth={1.5}
-															class="mx-0.5"
-														/>
-														{formatBytes(item.uploadLength)}
-													</span>
-												{/if}
-												{#if item.status === "complete" && item.completedAt}
-													<span>
-														&nbsp; | &nbsp;
-														{formatDate(item.completedAt)}
-													</span>
-												{/if}
-											</div>
-
-											<div class="sm:hidden flex flex-wrap font-medium text-[11px] tracking-wide items-center gap-0.5">
-												{#if item.completedLength && item.completedLength !== "0" && item.status !== "complete" }
-													<span>
-														{getPercentage(item.completedLength!, item.totalLength!)}
-														&nbsp; | &nbsp;
-													</span>
-												{/if}
-												{#if item.completedLength && item.completedLength !== "0"}
-													<span>
-														{formatBytes(item.completedLength)}
-													</span>
-												{/if}
-												{#if item.status !== "complete" && item.totalLength && item.totalLength !== "0" }
-													<span>
-														{`${item.completedLength && item.completedLength !== "0" ? "/" : ""} ${formatBytes(item.totalLength)}`}
-													</span>
-												{/if}
-												{#if item.uploadLength && item.uploadLength !== "0"}
-													<span class="flex flex-row items-center">
-														&nbsp; | &nbsp;
-														<HugeiconsIcon
-															icon={CloudUploadIcon}
-															size={15}
-															color="currentColor"
-															strokeWidth={1.5}
-															class="mx-0.5"
-														/>
-														{formatBytes(item.uploadLength)}
-													</span>
-												{/if}
-												{#if item.status && item.status !== null}
-													<span>
-														&nbsp; | &nbsp;
-														{item.status.charAt(0).toUpperCase() + item.status.slice(1)}
-													</span>
-												{/if}
-												{#if item.status === "complete" && item.completedAt}
-													<span>
-														&nbsp; | &nbsp;
-														{formatDate(item.completedAt)}
-													</span>
-												{/if}
-											</div>
-										{/if}
-									</div>
-								{/if}
-							</div>
-						</td>
-
-						<td class="lg:min-w-[400px]! max-sm:hidden">
-							<div class="gap-2 flex flex-col items-center justify-center">
-								<Badge
-									variant="outline"
-									class={`${getStatusClass(item.status)} rounded-xl w-24 py-[12px] shadow-sm`}
-								>
-									{item.status.toUpperCase()}
-								</Badge>
-								<span
-									class="flex flex-row align-baseline font-medium tracking-wide text-[12px] items-center gap-0.5 text-muted-foreground"
-								>
-									{#if item.downloadSpeed && item.downloadSpeed !== "0"}
-										{formatSpeed(item.downloadSpeed)}
-										<HugeiconsIcon
-											icon={ArrowDown02Icon}
-											size={14}
-											color="currentColor"
-											strokeWidth={2}
-										/>
-									{/if}
-									{#if item.uploadSpeed && item.uploadSpeed !== "0"}
-										| {formatSpeed(item.uploadSpeed)}
-										<HugeiconsIcon
-											icon={ArrowUp02Icon}
-											size={14}
-											color="currentColor"
-											strokeWidth={1.5}
-										/>
-									{/if}
-									{#if item.status === "error"}
-										<Tooltip.Provider>
-											<PopoverTooltip.Root>
-												<PopoverTooltip.Trigger
-													class="flex text-destructive items-center cursor-pointer justify-center gap-1"
-												>
-													{getFriendlyError(item.errorCode)}
-													<HugeiconsIcon
-														icon={BadgeInfoIcon}
-														size={12}
-														color="currentColor"
-														strokeWidth={2}
-													/>
-												</PopoverTooltip.Trigger>
-												<PopoverTooltip.Content class="text-wrap">
-													<p class="text-wrap">
-														{item.errorMessage?.replaceAll("--", "")}
-													</p>
-												</PopoverTooltip.Content>
-											</PopoverTooltip.Root>
-										</Tooltip.Provider>
-									{/if}
-								</span>
-							</div>
-						</td>
-
-						<td class="text-right pr-2 lg:pr-6" onclick={(e) => e.stopPropagation()}>
-							<DropdownMenu.Root>
-								<DropdownMenu.Trigger class="cursor-pointer">
-									<HugeiconsIcon
-										icon={MoreVerticalCircle01Icon}
-										size={20}
-										color="currentColor"
-										strokeWidth={1.5}
-									/>
-									<span class="sr-only">Open menu</span>
-								</DropdownMenu.Trigger>
-								<DropdownMenu.Content align="end" class="p-3 cursor-pointer text-sm">
-									{#if ["active"].includes(item.status)}
-										<DropdownMenu.Item
-											onclick={() => handlePause(item)}
-											class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
-												pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
-										>
-											Pause
-										</DropdownMenu.Item>
-									{/if}
-									{#if ["error", "stopped", "removed"].includes(item.status)}
-										<DropdownMenu.Item
-											title="Retry to error"
-											onclick={() => handleRetry(item)}
-											class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
-												pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
-										>
-											Retry
-										</DropdownMenu.Item>
-									{/if}
-									{#if ["paused"].includes(item.status)}
-										<DropdownMenu.Item
-											onclick={() => handleResume(item)}
-											class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
-												pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
-										>
-											Resume
-										</DropdownMenu.Item>
-									{/if}
-									{#if ["active", "waiting"].includes(item.status)}
-										<DropdownMenu.Item
-											title="Stop from downloading"
-											onclick={() => handleStop(item)}
-											class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
-												pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
-										>
-											Stop
-										</DropdownMenu.Item>
-									{/if}
-									{#if ["active", "seeding", "waiting", "paused"].includes(item.status)}
-										<DropdownMenu.Item
-											title="Change options"
-											onclick={() => {}}
-											class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
-												pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
-										>
-											Change options
-										</DropdownMenu.Item>
-									{/if}
-									{#if ["error", "stopped"].includes(item.status)}
-										<DropdownMenu.Item
-											title="Set options"
-											onclick={() => {}}
-											class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
-												pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
-										>
-											Set options
-										</DropdownMenu.Item>
-									{/if}
-									{#if ["complete"].includes(item.status)}
-										<DropdownMenu.Item
-											class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
-												pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
-										>
-											Redownload
-										</DropdownMenu.Item>
-									{/if}
-									{#if ["seeding"].includes(item.status)}
-										<DropdownMenu.Item
-											class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
-												pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
-										>
-											Stop seeding
-										</DropdownMenu.Item>
-									{/if}
-									<DropdownMenu.Separator />
-									{#if item.status}
-										<DropdownMenu.Item
-											onclick={() => {}}
-											class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
-												pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
-										>
-											Details
-										</DropdownMenu.Item>
-									{/if}
-									{#if item.kind === "uri" || item.sourceUri?.startsWith("magnet")}
-										<DropdownMenu.Item
-											onclick={() => navigator.clipboard.writeText(item.sourceUri!)}
-											class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
-												pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
-										>
-											Copy uri
-										</DropdownMenu.Item>
-									{/if}
-									<DropdownMenu.Item
-										onclick={() => {
-											let filesArr = JSON.parse(item.files!);
-											navigator.clipboard.writeText(filesArr[0].replace(/\.$/, ""))
-										}}
-										class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
-											pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
-									>
-										Copy path
-									</DropdownMenu.Item>
-									<DropdownMenu.Item
-										onclick={() => navigator.clipboard.writeText(item.gid)}
-										class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
-											pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
-									>
-										Copy GID
-									</DropdownMenu.Item>
-									<DropdownMenu.Separator />
-									<DropdownMenu.Item
-										class="flex text-destructive hover:rounded-xl items-center px-2 py-1.5 rounded-md
-											pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-destructive/80"
-										onclick={() => promptDelete([item.gid])}
-									>
-										Delete
-									</DropdownMenu.Item>
-								</DropdownMenu.Content>
-							</DropdownMenu.Root>
-						</td>
-					</tr>
-				{:else}
-					<tr>
-						<td colspan="5" class="h-[80svh] text-center text-muted-foreground">
-							<span class="text-wrap font-normal max-md:text-[16px]">
-								No downloads found {`in category ${$selectedCategory ? $selectedCategory + `${" "} ${"and status"} ${selectedStatus}${"..."}` : ""}`}
-							</span>
-						</td>
-					</tr>
-				{/each}
-			</tbody>
-		</table>
+		{#if visibleItems.length > 0}
+			<Virtual
+				bind:viewportEl={virtualViewport}
+				items={visibleItems}
+				height={Math.max(650, typeof window !== "undefined" ? window.innerHeight - 260 : 600)}
+				itemHeight={ITEM_STRIDE}
+				overscan={4}
+				rowGap={0}
+				overflowY="auto"
+				class="w-full"
+				getKey={(item) => item.gid}
+				row={row}
+				onEndReached={loadNextPage}
+				rowsStyle="
+					display: flex;
+					align-items: stretch;
+					box-sizing: border-box;
+					border-top-style: var(--tw-border-style);
+					border-top-width: 0.5px;
+				"
+			/>
+			{#if loading}
+					<div class="py-2 text-center text-xs text-muted-foreground
+					animate-pulse border-t border-border/40">
+						Loading more downloads...
+					</div>
+			{/if}
+		{:else}
+			<div class="h-[80svh] w-full flex items-center justify-center text-center text-muted-foreground">
+				<span class="text-wrap font-normal max-md:text-[16px]">
+					No downloads found {`in category ${$selectedCategory ? $selectedCategory + `${" "} ${"and status"} ${$selectedStatus}${"..."}` : ""}`}
+				</span>
+			</div>
+		{/if}
 
 		{#if dragSelecting}
 			<div
@@ -978,7 +744,6 @@ function handleStatusScrollState() {
 					height: ${Math.abs(dragCurrent.y - dragStart.y)}px;`}
 			></div>
 		{/if}
-		<div bind:this={sentinel} class="h-px w-full" aria-hidden="true"></div>
 	</div>
 </div>
 
@@ -1033,5 +798,496 @@ function handleStatusScrollState() {
 		-webkit-mask-image: linear-gradient(to right, transparent 0%, black 15%, black 85%, transparent 100%);
 		mask-image: linear-gradient(to right, transparent 0%, black 15%, black 85%, transparent 100%);
 	}
+
+	@media (max-width: 767px) {
+		.keep-font-small {
+			font-size: 14px !important;
+		}
+	}
 </style>
+
+{#snippet row(item: ItemMetaData, index: number, rowStyle: string)}
+<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+	<div
+		data-row-gid={item.gid}
+		onclick={(e) => handleRowClick(e, item)}
+		data-selected={$selectedGids.includes(item.gid)}
+		style={`${rowStyle}; ${getRowStyle(item)}`}
+		class="cursor-pointer h-[75px] max-h-fit bg-blend-darken transition-colors hover:bg-muted/50 data-[selected=true]:bg-[#DDA0DD]/40 border-xl"
+	>
+		<div class="xs:w-12 xs:h-16 h-[inherit] w-8 flex justify-center items-center shrink-0">
+			<img
+				src={getIcon(item)}
+				alt="svg-icon"
+				aria-hidden="true"
+				class="w-5 sm:w-7 xs:w-6 shrink-0"
+			/>
+		</div>
+
+	<div class="flex min-w-0 flex-1 items-center">
+		<div class="lg:min-w-[70%]">
+			<div class="flex flex-col min-h-10 justify-center w-full">
+				<!-- // Name, for mobile and desktop-->
+				<!-- // visible till xs -->
+				<span
+					title={item.name || item.gid}
+					class="font-medium block xs:hidden text-[13px] float-left max-w-[100%]"
+				>
+					{(item.name?.length ?? 0) > 15 ? `${item.name?.slice(0, 25)}...${item.name?.slice(-6)}` : item.name || "<Untitled>"}
+				</span>
+				<!-- // visible till sm -->
+				<span
+					title={item.name || item.gid}
+					class="font-medium block max-xs:hidden sm:hidden text-[14px] float-left"
+				>
+					{(item.name?.length ?? 0) > 30 ? `${item.name?.slice(0, 30)}...${item.name?.slice(-4)}` : item.name || "<Untitled>"}
+				</span>
+				<!-- // visible between upper xs and md -->
+				<span
+					title={item.name || item.gid}
+					class="font-medium block max-sm:hidden md:hidden text-[14px] float-left"
+				>
+					{(item.name?.length ?? 0) > 40 ? `${item.name?.slice(0, 40)}...${item.name?.slice(-8)}` : item.name || "<Untitled>"}
+				</span>
+				<!-- // visible on upper md -->
+				<span
+					title={item.name || item.gid}
+					class="font-medium hidden md:block text-[16px] float-left"
+				>
+					{(item.name?.length ?? 0) > 50 ? `${item.name?.slice(0, 50)}...${item.name?.slice(-8)}` : item.name || "<Untitled>"}
+				</span>
+
+				{#if item.status === "error"}
+					<div class="flex items-center mt-0.5 text-[12px] text-muted-foreground gap-2">
+						<span
+							class="flex max-sm:hidden items-center md:font-medium gap-0.5 text-[12px] text-destructive max-w-[300px]"
+						>
+							<span class="flex items-center">
+								{#if item.completedLength && item.completedLength !== "0"}
+									{getPercentage(item.completedLength!, item.totalLength!)} &nbsp; | &nbsp;
+								{/if}
+								{#if item.completedLength && item.completedLength !== "0"}
+									&nbsp; | &nbsp;
+									{formatBytes(item.completedLength)}
+								{/if}
+								{#if item.totalLength && item.totalLength !== "0"}
+									{formatBytes(item.totalLength)}
+								{/if}
+								{#if item.uploadLength && item.uploadLength !== "0"}
+									&nbsp; | &nbsp;
+									<HugeiconsIcon
+										icon={CloudUploadIcon}
+										size={15}
+										color="currentColor"
+										strokeWidth={1.5}
+										class="mx-0.5"
+									/>
+									{formatBytes(item.uploadLength)}
+								{/if}
+							</span>
+						</span>
+
+						<!-- For mobile devices -->
+						<span
+							class="flex sm:hidden items-center md:font-medium gap-0.5 text-[12px] text-destructive max-w-[300px]"
+						>
+							<!--
+								percentage, totalLength,
+								error, errorMessage
+							-->
+							<span class="flex flex-col">
+								<span class="block">
+									{#if item.completedLength && item.completedLength !== "0"}
+										{getPercentage(item.completedLength!, item.totalLength!)} &nbsp; | &nbsp;
+									{/if}
+									{#if item.totalLength && item.totalLength !== "0"}
+										{formatBytes(item.totalLength)}
+									{/if}
+								</span>
+								<span class="flex flex-row">
+									<span class="sm:hidden">
+										{item.status?.charAt(0).toUpperCase() + item.status.slice(1)}
+									</span>
+									&nbsp; | &nbsp;
+									<Tooltip.Provider>
+										<PopoverTooltip.Root>
+											<PopoverTooltip.Trigger
+												class="flex text-destructive items-center cursor-pointer justify-center gap-1"
+											>
+												{getFriendlyError(item.errorCode)}
+												<HugeiconsIcon
+													icon={BadgeInfoIcon}
+													size={12}
+													color="currentColor"
+													strokeWidth={2}
+												/>
+											</PopoverTooltip.Trigger>
+											<PopoverTooltip.Content>
+												<p
+													class="text-wrap text-destructive keep-font-small sm:w-[64]"
+													style="overflow-wrap: break-word;"
+												>
+													{item.errorMessage?.replaceAll("--", "")}
+												</p>
+											</PopoverTooltip.Content>
+										</PopoverTooltip.Root>
+									</Tooltip.Provider>
+								</span>
+							</span>
+						</span>
+					</div>
+				{:else}
+					<div class="flex items-center text-[12px] text-muted-foreground gap-2 mt-1">
+						{#if (item.completedLength && item.completedLength !== "0") || item.totalLength !== "0" || item.status !== null}
+							<div class="max-sm:hidden flex md:font-medium tracking-wide items-center gap-0.5">
+								{#if item.completedLength && item.completedLength !== "0"}
+									<span>
+										{getPercentage(item.completedLength!, item.totalLength!)}
+										&nbsp; | &nbsp;
+									</span>
+								{/if}
+								{#if item.completedLength && item.completedLength !== "0"}
+									<span>
+										{formatBytes(item.completedLength)}
+									</span>
+								{/if}
+								{#if item.totalLength && item.totalLength !== "0"}
+									<span>
+										{`${item.completedLength && item.completedLength !== "0" ? "/" : ""} ${formatBytes(item.totalLength)}`}
+									</span>
+								{/if}
+								{#if item.uploadLength && item.uploadLength !== "0"}
+									<span class="flex flex-row items-center">
+										&nbsp; | &nbsp;
+										<HugeiconsIcon
+											icon={CloudUploadIcon}
+											size={15}
+											color="currentColor"
+											strokeWidth={1.5}
+											class="mx-0.5"
+										/>
+										{formatBytes(item.uploadLength)}
+									</span>
+								{/if}
+								{#if item.status === "complete" && item.completedAt}
+									<span>
+										&nbsp; | &nbsp;
+										{formatDate(item.completedAt)}
+									</span>
+								{/if}
+								{#if item.status && item.status === "active"}
+									{@const eta = aria2.calculateETA(item)}
+									{#if eta && eta !== "" && eta !== "0sec"}
+										<span>
+											&nbsp; | &nbsp;
+											ETA: {eta}
+										</span>
+									{/if}
+								{/if}
+							</div>
+
+							<!-- For mobile devices -->
+							<!-- I should've generated by ai -->
+							<div class="sm:hidden flex flex-col font-medium text-[11px] tracking-wide gap-0.5">
+								<span class="flex flex-row">
+									<!-- percentage, no when complete -->
+									{#if item.completedLength && item.completedLength !== "0" && item.status !== "complete"}
+										<span>
+											{getPercentage(item.completedLength!, item.totalLength!)}
+											&nbsp; | &nbsp;
+										</span>
+									{/if}
+									<!-- speeds only when active or seeding -->
+									{#if item.status !== "complete" && ['active', 'seeding'].includes(item.status)}
+										{#if item.downloadSpeed && item.downloadSpeed !== "0"}
+											<span class="flex flex-row">
+												<HugeiconsIcon
+													icon={ArrowDown02Icon}
+													size={14}
+													color="currentColor"
+													strokeWidth={2}
+												/>
+												{formatSpeed(item.downloadSpeed)}
+												&nbsp; | &nbsp;
+											</span>
+										{/if}
+										{#if item.uploadSpeed && item.uploadSpeed !== "0"}
+											|
+											<span class="flex flex-row">
+												<HugeiconsIcon
+													icon={ArrowDown02Icon}
+													size={14}
+													color="currentColor"
+													strokeWidth={2}
+												/>
+												{formatSpeed(item.uploadSpeed)}
+												&nbsp; | &nbsp;
+											</span>
+										{/if}
+									{/if}
+									<!-- completed length by total length only when not active or seeding -->
+									{#if item.completedLength && item.completedLength !== "0" && !['active', 'seeding'].includes(item.status)}
+										<span>
+											{formatBytes(item.completedLength)}
+										</span>
+										{#if item.status !== "complete" && item.totalLength && item.totalLength !== "0" }
+											<span>
+												{`${item.completedLength && item.completedLength !== "0" ? "/" : ""} ${formatBytes(item.totalLength)}`}
+											</span>
+										{/if}
+									{/if}
+									<!-- upload Length -->
+									{#if item.uploadLength && item.uploadLength !== "0"}
+										<span class="flex flex-row items-center">
+											&nbsp; | &nbsp;
+											<HugeiconsIcon
+												icon={CloudUploadIcon}
+												size={15}
+												color="currentColor"
+												strokeWidth={1.5}
+												class="mx-0.5"
+											/>
+											{formatBytes(item.uploadLength)}
+											&nbsp; | &nbsp;
+										</span>
+									{/if}
+									<!-- completed time when completed -->
+									{#if item.status === "complete" && item.completedAt !== null}
+										<span>
+											&nbsp; | &nbsp;
+											{formatDate(item.completedAt)}
+										</span>
+									{/if}
+									<!-- status -->
+									{#if item.status && item.status !== null}
+										{#if item.status && item.status !== null && item.totalLength && item.totalLength !== "0" && item.completedLength && item.completedLength !== "0"}
+											&nbsp; | &nbsp;
+										{/if}
+										<span>
+											{item.status?.charAt(0).toUpperCase() + item.status.slice(1)}
+										</span>
+									{/if}
+								</span>
+								<!-- in col when multiple values -->
+								<span class="flex flex-row">
+									{#if item.status !== "complete" && ['active', 'seeding'].includes(item.status) && item.totalLength && item.totalLength !== "0" }
+										{@const eta = aria2.calculateETA(item)}
+										{#if item.completedLength && item.completedLength !== "0"}
+											<span>
+												{formatBytes(item.completedLength)}
+											</span>
+										{/if}
+										<span>
+											{`${item.completedLength && item.completedLength !== "0" ? "/" : ""} ${formatBytes(item.totalLength)}`}
+										</span>
+										{#if eta && eta !== "" && eta !== "0sec"}
+											<span>
+												&nbsp; | &nbsp;
+												ETA: {eta}
+											</span>
+										{/if}
+									{/if}
+								</span>
+							</div>
+						{/if}
+					</div>
+				{/if}
+			</div>
+		</div>
+	</div>
+
+		<div class="sm:min-w-[30%]! max-sm:hidden flex justify-center">
+			<div class="gap-2 flex flex-col items-center justify-center">
+				<Badge
+					variant="outline"
+					class={`${getStatusClass(item.status)} rounded-xl w-24 py-[12px] shadow-sm`}
+				>
+					{item.status?.toUpperCase()}
+				</Badge>
+				<span
+					class="flex flex-row align-baseline font-medium tracking-wide text-[12px] items-center gap-0.5 text-muted-foreground"
+				>
+					{#if item.downloadSpeed && item.downloadSpeed !== "0"}
+						<HugeiconsIcon
+							icon={ArrowDown02Icon}
+							size={14}
+							color="currentColor"
+							strokeWidth={2}
+						/>
+						{formatSpeed(item.downloadSpeed)}
+					{/if}
+					{#if item.uploadSpeed && item.uploadSpeed !== "0"}
+						|
+						<HugeiconsIcon
+							icon={ArrowUp02Icon}
+							size={14}
+							color="currentColor"
+							strokeWidth={1.5}
+						/>
+						{formatSpeed(item.uploadSpeed)}
+					{/if}
+					{#if item.status === "error"}
+						<Tooltip.Provider>
+							<PopoverTooltip.Root>
+								<PopoverTooltip.Trigger
+									class="flex text-destructive items-center cursor-pointer justify-center gap-1"
+								>
+									{getFriendlyError(item.errorCode)}
+									<HugeiconsIcon
+										icon={BadgeInfoIcon}
+										size={12}
+										color="currentColor"
+										strokeWidth={2}
+									/>
+								</PopoverTooltip.Trigger>
+								<PopoverTooltip.Content class="sm:w-[64]">
+									<p
+										class="text-wrap text-destructive sm:w-[64]"
+										style="overflow-wrap: break-word !important; word-break: break-all !important;"
+									>
+										{item.errorMessage?.replaceAll("--", "")}
+									</p>
+								</PopoverTooltip.Content>
+							</PopoverTooltip.Root>
+						</Tooltip.Provider>
+					{/if}
+				</span>
+			</div>
+		</div>
+
+		<div class="text-right pr-2 lg:pr-6 flex justify-center" onclick={(e) => e.stopPropagation()}>
+			<DropdownMenu.Root>
+				<DropdownMenu.Trigger class="cursor-pointer">
+					<HugeiconsIcon
+						icon={MoreVerticalCircle01Icon}
+						size={20}
+						color="currentColor"
+						strokeWidth={1.5}
+					/>
+					<span class="sr-only">Open menu</span>
+				</DropdownMenu.Trigger>
+				<DropdownMenu.Content align="end" class="p-3 cursor-pointer text-sm">
+					{#if ["active"].includes(item.status)}
+						<DropdownMenu.Item
+							onclick={() => handlePause(item)}
+							class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
+								pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
+						>
+							Pause
+						</DropdownMenu.Item>
+					{/if}
+					{#if ["error", "stopped", "removed"].includes(item.status)}
+						<DropdownMenu.Item
+							title="Retry to error"
+							onclick={() => handleRetry(item)}
+							class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
+								pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
+						>
+							Retry
+						</DropdownMenu.Item>
+					{/if}
+					{#if ["paused"].includes(item.status)}
+						<DropdownMenu.Item
+							onclick={() => handleResume(item)}
+							class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
+								pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
+						>
+							Resume
+						</DropdownMenu.Item>
+					{/if}
+					{#if ["active", "waiting"].includes(item.status)}
+						<DropdownMenu.Item
+							title="Stop from downloading"
+							onclick={() => handleStop(item)}
+							class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
+								pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
+						>
+							Stop
+						</DropdownMenu.Item>
+					{/if}
+					{#if ["active", "seeding", "waiting", "paused"].includes(item.status)}
+						<DropdownMenu.Item
+							title="Change options"
+							onclick={() => {}}
+							class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
+								pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
+						>
+							Change options
+						</DropdownMenu.Item>
+					{/if}
+					{#if ["error", "stopped"].includes(item.status)}
+						<DropdownMenu.Item
+							title="Set options"
+							onclick={() => {}}
+							class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
+								pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
+						>
+							Set options
+						</DropdownMenu.Item>
+					{/if}
+					{#if ["complete"].includes(item.status)}
+						<DropdownMenu.Item
+							class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
+								pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
+						>
+							Redownload
+						</DropdownMenu.Item>
+					{/if}
+					{#if ["seeding"].includes(item.status)}
+						<DropdownMenu.Item
+							class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
+								pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
+						>
+							Stop seeding
+						</DropdownMenu.Item>
+					{/if}
+					<DropdownMenu.Separator />
+					{#if item.status}
+						<DropdownMenu.Item
+							onclick={() => {}}
+							class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
+								pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
+						>
+							Details
+						</DropdownMenu.Item>
+					{/if}
+					{#if item.kind === "uri" || item.sourceUri?.startsWith("magnet")}
+						<DropdownMenu.Item
+							onclick={() => navigator.clipboard.writeText(item.sourceUri!)}
+							class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
+								pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
+						>
+							Copy uri
+						</DropdownMenu.Item>
+					{/if}
+					<DropdownMenu.Item
+						onclick={() => {
+							let filesArr = JSON.parse(item.files!);
+							navigator.clipboard.writeText(filesArr[0].replace(/\.$/, ""))
+						}}
+						class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
+							pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
+					>
+						Copy path
+					</DropdownMenu.Item>
+					<DropdownMenu.Item
+						onclick={() => navigator.clipboard.writeText(item.gid)}
+						class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
+							pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
+					>
+						Copy GID
+					</DropdownMenu.Item>
+					<DropdownMenu.Separator />
+					<DropdownMenu.Item
+						class="flex text-destructive hover:rounded-xl items-center px-2 py-1.5 rounded-md
+							pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-destructive/80"
+						onclick={() => promptDelete([item.gid])}
+					>
+						Delete
+					</DropdownMenu.Item>
+				</DropdownMenu.Content>
+			</DropdownMenu.Root>
+		</div>
+	</div>
+{/snippet}
 

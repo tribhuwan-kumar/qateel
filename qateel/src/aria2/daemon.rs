@@ -33,11 +33,12 @@ impl Aria2Daemon {
 		}
 
 		let mut cmd = Command::new("aria2c");
-		debug!("aria2 download dir: {:?}", config.aria2_dir.display());
+		debug!("Aria2 download dir: {:?}", config.aria2_dir.display());
 
         // No `--daemon=true` here because spawn `Aria2` as `Qateel` child process
         // To hold the stdout/stderr pipes and manage the lifecycle directly.
-        cmd.arg("--enable-rpc=true")
+        cmd.arg("--daemon=false")
+			.arg("--enable-rpc=true")
 			.arg(format!("--dir={}", config.aria2_dir.display()))
 			.arg(format!("--rpc-listen-port={}", config.aria2_port))
 			.arg(format!("--rpc-save-upload-metadata=false"))
@@ -48,8 +49,22 @@ impl Aria2Daemon {
             cmd.arg(format!("--rpc-secret={}", config.aria2_secret));
         }
 
-        // restricted keys that is not allowed to override via api
-        let restricted = ["dir", "enable-rpc", "rpc-listen-port", "rpc-secret", "daemon", "rpc-save-upload-metadata"];
+		if !config.aria2_rpc_user.is_empty() && !config.aria2_rpc_passwd.is_empty()  {
+			cmd.arg(format!("--rpc-user={}", config.aria2_rpc_user));
+			cmd.arg(format!("--rpc-passwd={}", config.aria2_rpc_passwd));
+		}
+
+        // Restricted keys that is not allowed to override via api
+        let restricted = [
+			"dir",
+			"enable-rpc",
+			"rpc-listen-port",
+			"rpc-secret",
+			"daemon",
+			"rpc-save-upload-metadata",
+			"rpc-passwd",
+			"rpc-user",
+		];
 
         debug!("Aria2 arguments: {:?}", args);
         for (key, value) in args {

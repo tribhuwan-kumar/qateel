@@ -34,6 +34,16 @@ CREATE TABLE IF NOT EXISTS download_history (
     'torrent',
     'unknown'
   )),
+	category TEXT CHECK(category IN (
+    'torrent',
+    'music',
+    'photos',
+    'programs',
+    'videos',
+    'subtitles',
+    'compressed',
+    'others'
+  )),
   status TEXT NOT NULL CHECK(status IN (
     'error',
     'paused',
@@ -51,19 +61,17 @@ CREATE TABLE IF NOT EXISTS download_history (
 	upload_length TEXT,                                            -- For torrents seeding
 	source_uri TEXT,                                               -- The uri to perform retries
 	info_hash TEXT,                                                -- Hex string for torrent identification
-	seeder BOOLEAN,
+	seeder TEXT,																									 -- BOOL
 	content_hash TEXT,                                             -- Blake3 hash of the final downloaded content
 	error_code INTEGER,
 	error_message TEXT,
 	torrent TEXT CHECK(torrent IS NULL OR json_valid(torrent)),    -- Json encoded `TorrentMagnetMeta`
-	options TEXT CHECK(options IS NULL OR json_valid(options)),
-	is_resume_supported BOOLEAN,
-	connections TEXT,
+	options TEXT CHECK(options IS NULL OR json_valid(options)),		 -- Json encoded `options`
+	is_resume_supported TEXT,																			 -- BOOL
 	num_pieces TEXT,
-	num_seeders TEXT,
 	piece_length TEXT,
 	verified_length TEXT,
-	verify_integrity_pending BOOLEAN,
+	verify_integrity_pending TEXT,																 -- BOOL
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 	completed_at DATETIME,

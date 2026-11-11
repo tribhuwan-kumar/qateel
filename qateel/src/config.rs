@@ -44,6 +44,10 @@ pub struct Aria2Config {
     pub secret: Option<String>,
 	#[schemars(description = "Aria2 directory to store downloaded content.")]
     pub dir: Option<PathBuf>,
+	#[schemars(description = "Aria2 JSON-RPC user name. Optional; no default value.")]
+    pub rpc_user: Option<String>,
+	#[schemars(description = "Aria2 JSON-RPC user password. Optional; no default value.")]
+    pub rpc_passwd: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema, Default)]
@@ -70,6 +74,8 @@ pub struct AppConf {
     pub aria2_port: String,
     pub aria2_secret: String,
 	pub aria2_dir: PathBuf,
+	pub aria2_rpc_user: String,
+	pub aria2_rpc_passwd: String,
     pub cors_origins: Vec<String>,
     pub data_dir: PathBuf,
     pub verbose: bool,
@@ -116,6 +122,55 @@ impl AppConf {
         let app = config.as_ref().and_then(|c| c.app.as_ref());
 
 		let cli_cors_origins = Self::parse_cors_origins(args.cors_origins);
+        let secret_opt = args
+            .aria2_secret
+            .clone()
+            .or_else(|| aria2.and_then(|a| a.secret.clone()))
+            .filter(|s| !s.trim().is_empty());
+		let rpc_user_opt = args
+			.aria2_rpc_user
+			.clone()
+			.or_else(|| aria2.as_ref().and_then(|a| a.rpc_user.clone()))
+			.filter(|s| !s.trim().is_empty());
+		let rpc_passwd_opt = args
+			.aria2_rpc_password
+			.clone()
+			.or_else(|| aria2.as_ref().and_then(|a| a.rpc_passwd.clone()))
+			.filter(|s| !s.trim().is_empty());
+
+		match (&secret_opt, &rpc_user_opt, &rpc_passwd_opt) {
+            // Case A: Everything is missing
+            (None, None, None) => {
+                eprintln!(
+                    // "\x1b[1;31mError:\x1b[0m Aria2 JSON-RPC auth credentials missing. You must provide either Aria2 secret or Aria2 JSON-RPC user & password."
+					"\x1b[1;31mError:\x1b[0m  Aria2 JSON-RPC secret must be provided either via cli arguments or configuration file."
+                );
+                std::process::exit(1);
+            }
+            // Case B: Clashing configurations (secret & user,pass details are provided)
+            (Some(_), Some(_), _) | (Some(_), _, Some(_)) => {
+                eprintln!(
+                    "\x1b[1;31mError:\x1b[0m Clashing auth credentials. Define either Aria2 secret or Aria2 JSON-RPC user & password, but do not define both authentication methods at the same time."
+                );
+                std::process::exit(1);
+            }
+            // Case C: User defined without password
+            (None, Some(_), None) => {
+                eprintln!(
+                    "\x1b[1;31mError:\x1b[0m Aria2 JSON-RPC user is defined, but JSON-RPC password is missing. Both must be provided together."
+                );
+                std::process::exit(1);
+            }
+            // Case D: Password defined without User
+            (None, None, Some(_)) => {
+                eprintln!(
+                    "\x1b[1;31mError:\x1b[0m Aria2 JSON-RPC password is defined, but JSON-RPC user is missing. Both must be provided together."
+                );
+                std::process::exit(1);
+            }
+            // Case E: Fully valid states (secret only, or complete user,pass only)
+            _ => {}
+        }
 
         Self {
             port: Self::merge_with_default(args.port, 8080, server.and_then(|s| s.port)),
@@ -134,19 +189,9 @@ impl AppConf {
                 "6800".to_string(),
                 aria2.and_then(|a| a.port.clone()),
             ),
-			aria2_secret: match args
-				.aria2_secret
-				.clone()
-				.or_else(|| aria2.and_then(|a| a.secret.clone()))
-			{
-				Some(secret) => secret,
-				None => {
-					eprintln!(
-						"\x1b[1;31mError:\x1b[0m Aria2 secret must be provided either via cli arguments or configuration file."
-					);
-					std::process::exit(1);
-				}
-			},
+            aria2_secret: secret_opt.unwrap_or_default(),
+            aria2_rpc_user: rpc_user_opt.unwrap_or_default(),
+            aria2_rpc_passwd: rpc_passwd_opt.unwrap_or_default(),
             aria2_dir: Self::merge_with_default(
                 args.aria2_dir,
                 default_aria2_dir(),

@@ -16,6 +16,7 @@
 	import GlobalOptions from "$lib/components/settings/GlobalOptions.svelte";
 	import { aria2, itemCounts } from "$lib/aria2/client.svelte";
 	import Aria2Info from "$lib/components/Aria2Info.svelte"
+	import CreateUser from "$lib/components/CreateUser.svelte";
 	import App from "../../assets/svgs/app.svg"
 	import AppLight from "../../assets/svgs/app-light.svg"
 	import Aria2 from "../../assets/svgs/aria2.svg"
@@ -41,7 +42,9 @@
   let isDarkMode = $state(false);
   let showMoreDialog = $state(false);
   let showAria2InfoDialog = $state(false);
+  let showCreateUserDialog = $state(false);
 	let username = $derived(authState.username);
+	let userRole = $derived(authState.role);
 	let role = $derived(authState.role);
   let isAria2Alive = $derived($systemState.status?.aria2Alive);
 
@@ -190,10 +193,10 @@
     }
   }
 
-  function selectCategory(category: DownloadCategory) {
-    selectedCategory.set(category);
-    clearSelection();
-  }
+	function selectCategory(category: DownloadCategory) {
+		selectedCategory.set(category);
+		clearSelection();
+	}
 
   const formatSpeed = (val: number): string => {
     if (val === 0) return "Unlimited";
@@ -342,10 +345,15 @@
                   {/each}
 
                   {#each textControls as control (control.key)}
-                    <div class="rounded-xl border border-sidebar-border bg-sidebar-background/80 p-3 space-y-2">
+                    <div class="rounded-xl border border-sidebar-border bg-sidebar-background/80 p-3">
                       <Label class="block text-xs font-medium tracking-wide text-sidebar-foreground/70">
                         {control.label}
                       </Label>
+											{#if control.key === "dir"}
+												<span class="text-[12px] text-muted-foreground">
+													Only can be set via config file
+												</span>
+											{/if}
                       <input
                         type="text"
                         value={quickSettings[control.key]}
@@ -356,8 +364,12 @@
                           quickSettings[control.key] = e.currentTarget.value;
                           pushSetting(control.optionKey, e.currentTarget.value);
                         }}
-                        class={`w-full rounded-md border border-sidebar-border bg-sidebar-background/80 px-3 py-1.5 text-sm outline-none placeholder:text-muted-foreground/50 text-foreground transition-shadow focus-visible:ring-1 focus-visible:ring-sidebar-border ${!isAria2Alive ? "cursor-not-allowed!" : ""}`}
-                        disabled={!isAria2Alive}
+                        class={`w-full rounded-md border border-sidebar-border bg-sidebar-background/80 px-3 py-1.5 text-sm
+													outline-none placeholder:text-muted-foreground/50 text-foreground transition-shadow focus-visible:ring-1
+													focus-visible:ring-sidebar-border disabled:text-muted-foreground! ${!isAria2Alive ? "cursor-not-allowed!" : ""}
+													${control.key === "dir" ? "cursor-not-allowed! text-muted-foreground!" : ""}
+												`}
+                        disabled={!isAria2Alive || control.key === "dir"}
                       />
                     </div>
                   {/each}
@@ -543,12 +555,16 @@
                   Account
                 </span>
               </DropdownMenu.Item>
-              <DropdownMenu.Item class="flex items-center hover:rounded-xl px-2 py-1.5 text-sm rounded-md
-								pointer-events-auto cursor-pointer hover:bg-accent/10! text-muted-foreground! hover:text-primary!">
-                <span>
-                  Create user
-                </span>
-              </DropdownMenu.Item>
+							{#if userRole && userRole === "admin"}
+								<DropdownMenu.Item
+									onclick={() => showCreateUserDialog = true}
+									class="flex items-center hover:rounded-xl px-2 py-1.5 text-sm rounded-md pointer-events-auto
+										cursor-pointer hover:bg-accent/10! text-muted-foreground! hover:text-primary!">
+									<span>
+										Create user
+									</span>
+								</DropdownMenu.Item>
+							{/if}
               <DropdownMenu.Item class="flex items-center hover:rounded-xl px-2 py-1.5 text-sm rounded-md
 								pointer-events-auto cursor-pointer hover:bg-accent/10! text-muted-foreground! hover:text-primary!">
                 <span>
@@ -584,5 +600,9 @@
 
 <Aria2Info
 	bind:open={showAria2InfoDialog}
+/>
+
+<CreateUser
+	bind:open={showCreateUserDialog}
 />
 

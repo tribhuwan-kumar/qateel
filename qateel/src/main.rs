@@ -33,12 +33,14 @@ use crate::{
 	his::buf::ActiveTasks,
 	his::buf::ProgressBuffer,
     aria2::types::Aria2Client,
+	aria2::types::DlWsMessage,
 	aria2::daemon::Aria2Daemon,
     auth::types::AuthController,
     his::service::HistoryService,
+	aria2::types::GlobalStatWsMessage,
 };
 
-const CHANNEL: usize = 128;
+const CHANNEL: usize = 1024;
 const SHUTDOWN_CHANNEL: usize = 1;
 
 #[tokio::main]
@@ -62,8 +64,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (shutdown_tx, _) = broadcast::channel(SHUTDOWN_CHANNEL);
     let (aria2_resp_tx, _aria2_resp_rx) = broadcast::channel(CHANNEL);
-    let (history_tx_rw, _history_rx_rw) = broadcast::channel(CHANNEL);
-    let (global_tx_rw, _global_rx_rw) = broadcast::channel(CHANNEL);
+
+    let (history_tx_rw, _history_rx_rw) = watch::channel(DlWsMessage::default());
+    let (global_tx_rw, _global_rx_rw) = watch::channel(GlobalStatWsMessage::default());
 
 
     if !conf.data_dir.exists() {
@@ -71,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::fs::create_dir_all(&conf.data_dir)?;
     }
 
-    let aria2_url = format!("{}:{}/jsonrpc", conf.aria2_host, conf.aria2_port);
+    let aria2_url = format!("{}:{}/jsonrpc", &conf.aria2_host, &conf.aria2_port);
 
     /* Generate random 32-char secret */
     let jwt_secret = rand::rng()
@@ -107,14 +110,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = AppState {
         db: db_pool.clone(),
-		config: conf.clone(),
+		config: Arc::new(conf),
 		status_tx: status_tx,
-        jwt_secret: jwt_secret,
-		shutdown_tx: shutdown_tx,
-		daemon: Arc::new(aria2_daemon),
+        jwt_secret: Arc::new(jwt_secret),
+		shutdown_tx: Arc::new(shutdown_tx),
+		daemon: aria2_daemon,
 		active_tasks: actv_tasks,
-		progress_buffer: progress_updater,
-        aria2: Arc::new(aria2_client.clone()),
+		progress_buf: progress_updater,
+        aria2: Arc::new(aria2_client),
         history_tx: Arc::new(history_tx_rw),
         global_tx: Arc::new(global_tx_rw),
     };
@@ -131,21 +134,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Ignore ipv6
+	let server_config = state.config.clone();
     let (ipv4_addrs, _ipv6_addrs) = addrs::interface_addrs()?;
     let all_addrs = [ipv4_addrs].concat();
-    let addrs_listens = addrs::print_listening(&conf, &all_addrs)?;
+    let addrs_listens = addrs::print_listening(&server_config, &all_addrs)?;
 
     info!("{}", addrs_listens);
     info!("QateeL version: '{}'", env!("CARGO_PKG_VERSION"));
-    info!("Data directory: '{}'", &conf.data_dir.to_string_lossy());
+    info!("Data directory: '{}'", &server_config.data_dir.to_string_lossy());
 
-    if !conf.aria2_secret.is_empty() {
+
+    if !server_config.aria2_secret.is_empty() {
         info!("Aria2 secret token loaded");
     } else {
         error!("No Aria2 secret token provided, please define it in CLI args or in Config file");
     }
 
-    let client_clone = aria2_client.clone();
+	let client_clone = state.aria2.clone();
+
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(1)).await;
         match client_clone.call("aria2.getVersion", vec![]).await {
@@ -154,13 +160,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let app = api::routes(state.clone(), conf.cors_origins);
+    let app = api::routes(state.clone(), server_config.cors_origins.clone());
     let handle = axum_server::Handle::new();
     let shutdown_handle = handle.clone();
-    let addr: SocketAddr = format!("{}:{}", &conf.host, &conf.port).parse()?;
+    let addr: SocketAddr = format!("{}:{}", &server_config.host, &server_config.port).parse()?;
+
 
     let server = async move {
-        match (&conf.ssl_cert, &conf.ssl_key) {
+        match (&server_config.ssl_cert, &server_config.ssl_key) {
             (Some(cert), Some(key))
 				if !cert.to_string_lossy().is_empty() && !key.to_string_lossy().is_empty() => {
 					info!("HTTPS enabled with TLS cert/key");

@@ -2,19 +2,21 @@
 
 [server]
 port = 8080
+verbose = true
 host = "0.0.0.0"
-verbose = false
 cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
 [aria2]
-host = "ws://127.0.0.1"							# with prefix
 port = "6800"
 secret = "foobar"
-dir = "/home/trash/Downloads/aria2"
+host = "ws://127.0.0.1"							# with prefix
+dir = "/home/trash/Downloads/aria2/"
+rpc_user = ""
+rpc_passwd = ""
 
 [tls]
-cert = ""
 key = ""
+cert = ""
 
 [app]
 data_dir = "./qateel"

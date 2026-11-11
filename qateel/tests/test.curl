@@ -8,7 +8,7 @@
 # host, port as var
 ---host=http://localhost
 ---port=8080
----csrf_token=yuKtKFRrYyuYde00_A_4tYG3wmv1k2ayK2R6jfH_260
+---csrf_token=AZMXW6Ra4mOtFGn6OaQ18astF7H2_0z_XRZ4jdPoUq8
 
 
 # tell stopped
@@ -56,7 +56,6 @@ curl -H
     }'
 http://localhost:6800/jsonrpc
 
-
 curl -H
   'Content-Type:application/json' -d '{
         "jsonrpc":"2.0",
@@ -73,6 +72,16 @@ curl -H
         "id":"qateel",
         "method":"aria2.tellActive",
         "params": ["token:foobar"]
+    }'
+http://localhost:6800/jsonrpc
+
+# tell stopped
+curl -H
+    'Content-Type:application/json' -d '{
+        "jsonrpc":"2.0",
+        "id":"qateel",
+        "method":"aria2.tellStopped",
+        "params": ["token:foobar", 0, 100000]
     }'
 http://localhost:6800/jsonrpc
 
@@ -108,7 +117,32 @@ curl -H 'Content-Type:application/json' -d '{
 	"jsonrpc":"2.0",
 		"id":"qateel",
 		"method":"aria2.tellStatus",
-		"params": ["token:foobar", "cb83c9abc477662d"]
+		"params": ["token:foobar", "191cff970d23ba3f",
+			[
+				"gid",
+				"dir",
+				"status",
+				"downloadSpeed",
+				"uploadSpeed",
+				"totalLength",
+				"completedLength",
+				"uploadLength",
+				"errorCode",
+				"errorMessage",
+				"bittorrent",
+				"files",
+				"connections",
+				"numPieces",
+				"numSeeders",
+				"pieceLength",
+				"following",
+				"followedBy",
+				"belongsTo",
+				"seeder",
+				"verifiedLength",
+				"verifyIntegrityPending"
+			]
+		]
 }'
 http://localhost:6800/jsonrpc
 
@@ -125,8 +159,7 @@ curl POST -H
 http://localhost:6800/jsonrpc
 
 
-curl -s -w "@format.txt.bak"
--H 'Content-Type:application/json'
+curl -s -H 'Content-Type:application/json'
 -d '{
 		"jsonrpc":"2.0",
 		"id":"qateel",
@@ -140,8 +173,17 @@ curl -H
     'Content-Type:application/json' -d '{
         "jsonrpc":"2.0",
         "id":"qateel",
-        "method":"aria2.remove",
-        "params": ["token:foobar", "c0e98172b4a76022"]
+        "method":"aria2.forceRemove",
+        "params": ["token:foobar", "52e99391dcb99d09"]
+    }'
+http://localhost:6800/jsonrpc
+
+curl -H
+    'Content-Type:application/json' -d '{
+        "jsonrpc":"2.0",
+        "id":"qateel",
+        "method":"aria2.removeDownloadResult",
+        "params": ["token:foobar", "7c8b7ab43d817c12"]
     }'
 http://localhost:6800/jsonrpc
 
@@ -151,7 +193,7 @@ curl -H
         "jsonrpc":"2.0",
         "id":"qateel",
         "method":"aria2.unpause",
-        "params": ["token:foobar", "c0e98172b4a76022"]
+        "params": ["token:foobar", "52e99391dcb99d09"]
     }'
 http://localhost:6800/jsonrpc
 
@@ -170,7 +212,7 @@ curl -H
         "jsonrpc":"2.0",
         "id":"qateel",
         "method":"aria2.pause",
-        "params": ["token:foobar", "0"]
+        "params": ["token:foobar", "c3fefd6bfa7c5c97"]
     }'
 http://localhost:6800/jsonrpc
 
@@ -179,6 +221,16 @@ curl -H 'Content-Type:application/json' -d '{
         "id":"qateel",
         "jsonrpc":"2.0",
         "method":"system.listMethods",
+        "params": [
+          "token:foobar"
+        ]
+    }'
+http://localhost:6800/jsonrpc
+
+curl -H 'Content-Type:application/json' -d '{
+        "id":"qateel",
+        "jsonrpc":"2.0",
+        "method":"system.listNotifications",
         "params": [
           "token:foobar"
         ]
@@ -207,7 +259,7 @@ curl -H 'Content-Type: application/json' \
         "methodName": "aria2.forceRemove",
         "params": [
           "token:foobar",
-          "e42c5b9f92d3dc90"
+          "01076b0ae4d9ef9f"
         ]
       },
       {
@@ -360,16 +412,9 @@ curl $host:$port/api/qateel/cmd/set/options
 curl -b cookie
   -H 'Content-Type: application/json'
 	-H "X-CSRF-Token: $csrf_token"
-	-d '{
-		"uris": [
-			"http://pchan:9080/guest/media/movies/Awake%20%282021%29.mkv",
-			"https://worker-odd-art-9c42.lelota3786.workers.dev/53b87e707091a7a5fca1c84b455b201536493a97ba6b08a5a1074ad668a24a673505aac4b4c4a5f978c2e8f8a5d1f5f1c5d3d28f74cd6ab459e0e6363fc42d8abee1d5ac6731e361f14b5c3b295807b1058a9aefa208aac4fb95cc977b3ddcea50d2661a9e80e95108c605d7612217e3e687d1a7a260477af1589d587a0125af07bf6de6425b4603e641f124920170072b6cfac04519db9caf963c236b1ebe319805c83b21469869efc7c553ca1a93d2::b36e0861e86cbe23bd3d5f2fe349fc68/Casino.Jack.2010.1080P.Bluray.Hindi.English.Esubs.MoviesMod.zone.mkv",
-			"http://pchan:9080/guest/media/movies/Batman.The.Dark.Knight.Part.2.2013.1080p.BRRip.English-Audio.MoviesVerse.Org.In.mkv",
-			"https://video-downloads.googleusercontent.com/ADGPM2nSO_FbNVpT8v4n984T2qLPDNyDIQMj5jzkMPh01O5meIsbLDJK9SsTgvkvCtaYBbFvdQ3ugNLVQjfnA-Kzgya4t6JVVR8ox_Wp_Sf5Bbpsr9qAKKziUHZ6NuGyFWZmHjQBysGwn_JEJbOw8-b-gIoTB087sVYQkqGrff7tZtf3tnI3iW383YVqBCZowuE4MNQrUDUH-Q4Eqb8in_7UA-jYB_Gg3zsHagxnZpP8VaxA9WYup7LiGn79iNIvEPBkT93JlR4zSamNKLPovVkdsi25-gRfgBhUMLgpsw6mXHxFYzGHkGO5ohTadt1vVV3PzE4PlT3jtu_oCmy6DXi9F_hQyYtIrvKTwOzqtWY0CMet2U8GWkkYu2y9qk0k75oxy3WwjSGk0NLviiMIP1rjDX_kBSJnYTtkm9i64asvOtWN8nvEiXjqQ5iWAEn_btahoRyFBFRq4zDWbZrDhD_YDNeZxhoNrQ3Iu633M1VYBggHhg6IrhWE1ksxaHBR49y__ujaCKN0gVuf79ZNJxQNVpCjp8VMnRaY8NvIFUT2YKG9pebgjTccd_nChn60cWpqMx2gHSpl7hu_b1J1EdAiDlOMD9UHRwSJZI7x2DM-tXBVH9N1IqYG24NHO3oP87fcoMMscyyGwoGYQTt43XOAr2qLXE2n_xCYEQ6gPG0u9YccdqP_-YIfkZ3gOpi9lfEvJZ8JJ3lxF5vFuti1FwBhWfUrx392ysri6GOYHmoPZxAuL9uwagOn0FF5KmcH1UI0gtQLZNRVA1ppDQVrH9bncLCy7FvcAANaezQYqe2WL2ZOJVy1av4p9eBWelSVGhhtYO_pZMXdHmLRJ4fFeXAlMFBxxvE4HbkdB1IFu2jcYWVedn47ZImqN0wJrRfDocMaZ4pkKP9rWSXpduREyLTyp6hZ6iGHur4TOMhN-15SuLJ9zvK3DwH2jeKHnqElRXVQWyuLTuJL_ljY_flAmhEr3SD5HPE-BNCRm5Yvjp-AA8fr-GGndyTxFq900XLyKFGeZ6f8ipBjmDHIa_qGBO9OKKAOPpcgaH420A-T_S64iV2UArRCiLZ1v_GJ35jAVZr7nQog39pN",
-			"https://ash-speed.hetzner.com/100MB.bin"
-		]
-  }'
-$host:$port/api/qateel/add/uris
+	-d '
+	'
+http://localhost:8080/api/qateel/add/uris
 
 
 curl -b cookie
@@ -411,17 +456,12 @@ curl -b cookie
 $host:$port/api/qateel/gid/get/options
 
 
-curl -b cookie -s -w "@format.txt.bak"
+curl -b cookie
 	-X POST
   -H 'Content-Type: application/json'
 	-H "X-CSRF-Token: $csrf_token"
 	-d '{
 	"uris": [
-		"http://localhost:5000/Proof%20of%20Life%20(2000).mkv",
-		"http://localhost:5000/The.Green.Mile.1999.1080p.UHD.BluRay.x264.DD%207.1-Pahe.in.mkv",
-		"http://localhost:5000/Barry.Lyndon.1975.Criterion.1080P.Bluray.English.Esubs.MoviesMod.org.mkv",
-		"https://video-downloads.googleusercontent.com/ADGPM2lrFVA3UQgx17FKnjhhtkf6FrdaS0GZOan7wpAgsYbX_QvHpXa_gPGvuyw0_LPrL4m14sKxPq30siYNb-kFIWY-vbCt_G93Y3gzc7wSnN-vOLIucS5ZuCZxe9xzefn3VYquXqAkeOeRFA4JLhoMhc8XSoJmn4bcZw_thzplyqfPxtfyswYNFXiKy2dH25xNQ3taaHBUbSNmilDXH4kHPFLPCgXhpAabAAsy1_35ExTb4eh3h8Fc5gLtw_g_diWAYYfMizYrdfunCkjlyUU6QgwRHS1STGp3qnLg2sxPcz2Y2Vx6UftMY6ncVWGsAOV2WejOjNVm2IhFloLFfQ-qXWEb1_P59C4XMYGZZ1OLO0rUGbEMuKgoDcGDCG98E_vMqBPMLppB_-7zAGO_b6624m_b_PF_EYCnKxaFsLpQk1hwBnZ-SM7QpXC2CXxbELwA9VMZsz9KuuRuSZsWXz6Fz_wiUmX-_nsIovswA4iD_YFM2xE9nbzrpU9eitxRjDQR_HQ65NSTVTnUjOnRyamqs-N9EvO6tCt3SalplBJntL5WaQpB6_pgL6s5InXaEQ9LEZsa3-iWyGUyzAcPpDSORSoDSuNu_uM2VH331bUXvnPwP7VxRARaqKqYAo90MIFZIrcwfe2tCtTfA9-WeJhiXRMeqbYtCI-hYzJmrAn8wYrXHBe7x9jw5G2Wi1r3AbSE2wUK4R0RLkhMthz0QC8lPB7Z-rxYv6q3mQrJCmA6j8gb6Hc1HqbAVGYo7TYPLLoN1jYu2qwtw_SNPWwhXq5yuNoWohhx5dIYhEkd0AhQqWotaNDj03CK3yTr1M2HZ1dSuy1DcRL7CEORnJjOQ25u9vJ5iS1YQSf7u2wwLMV-fwc02pEIJj5q25Mq8Ll1aYH-O2OeunH0j2vIFHDGt-Laf8Npk7S5LxD-EqlN9Vboys0w85yQHMrp43CVL-Pleo9CQ6WR43RD0ZKbLnNFTu367j8gtV68blhOv2NlV9pdHLrABkDMNLwLV7VqY5YrO2zZC6nVKgWPPWf6HB_nMdYn4zcqa0uzWl6phBw7l4tOOQ50dYTHrxfXsqzWV2JKEHFnvQeyYyd5-okuTVqvAyqjoi1dCdaTfjAeO5ZHT0rFlwOm5bU8LLo",
-		"sftp://localhost:5000/check.mkv",
 		"magnet:?xt=urn:btih:c7e2608ab4961c3f31fe9389ddbed2485807a10c&dn=%5BAnoZu%5D%20KAIJU%20GIRL%20CARAMELISE%20S01E08%201080p%20CR%20WEB-DL%20Dual-Audio%20DDP%202.0%20H.264%20%7C%20Otome%20Kaijuu%20Caram%C3%A9liser&tr=http%3A%2F%2Fnyaa.tracker.wf%3A7777%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce",
 		"magnet:?xt=urn:btih:f9d35b23a1390107894518c592478dcaa32fd83d&dn=KAIJU%20GIRL%20CARAMELISE%20S01E10%20Dont%20Cry%20Heartbroken%20Kaiju%201080p%20CR%20WEB-DL%20AAC2.0%20H.264-VARYG%20%28Otome%20Kaijuu%20Caram%C3%A9liser%2C%20Multi-Subs%29&tr=http%3A%2F%2Fnyaa.tracker.wf%3A7777%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce",
 		"magnet:?xt=urn:btih:913e363365778112ca30de31a6f1c8875465e33c&dn=%5BYameii%5D%20KAIJU%20GIRL%20CARAMELISE%20-%20S01E08%20%5BEnglish%20Dub%5D%20%5BCR%20WEB-DL%201080p%20H264%20AAC%5D%20%5B2B447B4D%5D%20%28Otome%20Kaijuu%20Caramelise%29&tr=http%3A%2F%2Fnyaa.tracker.wf%3A7777%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce",
@@ -434,7 +474,7 @@ curl -b cookie -s -w "@format.txt.bak"
 		"magnet:?xt=urn:btih:c2e4e3fb652dd0687481bb5837d642ca7b3c10fd&dn=%5Bshincaps%5D%20Kuroneko%20to%20Majo%20no%20Kyoushitsu%20-%2021%20%28BS12%201440x1080%20MPEG2%20AAC%29.ts&tr=http%3A%2F%2Fnyaa.tracker.wf%3A7777%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce",
 		"magnet:?xt=urn:btih:051f8e1325c8f4b567d77ef6ef7766cc93ca39af&dn=%5BErai-raws%5D%20Otome%20Kaijuu%20Carameliser%20-%2010%20%5B720p%20CR%20WEB-DL%20AVC%20AAC%5D%5BMultiSub%5D%5B4D50B467%5D&tr=http%3A%2F%2Fnyaa.tracker.wf%3A7777%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce",
 		"magnet:?xt=urn:btih:1f8aeba9fa75b2f815f0d833a03b7e780f0d8668&dn=%5BSubsPlease%5D%20Otome%20Kaijuu%20Carameliser%20-%2010%20%28720p%29%20%5B8DE7E58E%5D.mkv&tr=http%3A%2F%2Fnyaa.tracker.wf%3A7777%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce",
-		"magnet:?xt=urn:btih:90f5b67cbd096e6a14f81fcae0a2e33fkeb3vDzH32VSBAMYNhM-gPjSxN59xVbFkbYkLc97E5 388ac7be&dn=%5BErai-raws%5D%20Otome%20Kaijuu%20Carameliser%20-%2010%20%5B1080p%20CR%20WEB-DL%20AVC%20AAC%5D%5BMultiSub%5D%5BA6129B4C%5D&tr=http%3A%2F%2Fnyaa.tracker.wf%3A7777%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce",
+		"magnet:?xt=urn:btih:90f5b67cbd096e6a14f81fcae0a2e33f388ac7be&dn=%5BErai-raws%5D%20Otome%20Kaijuu%20Carameliser%20-%2010%20%5B1080p%20CR%20WEB-DL%20AVC%20AAC%5D%5BMultiSub%5D%5BA6129B4C%5D&tr=http%3A%2F%2Fnyaa.tracker.wf%3A7777%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce",
 		"magnet:?xt=urn:btih:f03adb5342cafe71bc2f3ce63baa90273b5dde6a&dn=KAIJU%20GIRL%20CARAMELISE%20S01E10%20SUBFRENCH%201080p%20CR%20WEB-DL%20AAC2.0%20H.264-Tsundere-Raws%20%28READNFO%2C%20VOSTFR%2C%20Otome%20Kaijuu%20Carameliser%29&tr=http%3A%2F%2Fnyaa.tracker.wf%3A7777%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce",
 		"magnet:?xt=urn:btih:c7084153621deb12f9b63db84a129f124044bf9c&dn=KAIJU%20GIRL%20CARAMELISE%20S01E10%20SUBFRENCH%20720p%20CR%20WEB-DL%20AAC2.0%20x264-Tsundere-Raws%20%28VOSTFR%2C%20Otome%20Kaijuu%20Carameliser%29&tr=http%3A%2F%2Fnyaa.tracker.wf%3A7777%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce",
 		"magnet:?xt=urn:btih:ddf4087aca0b5c6e2db3bc86b9924e0ef34cdb8c&dn=%5BANi%5D%20Otome%20Kaijuu%20Carameliser%20%2F%20%20%E5%B0%91%E5%A5%B3%E6%80%AA%E7%8D%B8%E7%84%A6%E7%B3%96%E6%88%80%E5%BF%83%20-%2010%20%5B1080P%5D%5BBaha%5D%5BWEB-DL%5D%5BAAC%20AVC%5D%5BCHT%5D%5BMP4%5D&tr=http%3A%2F%2Fnyaa.tracker.wf%3A7777%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce",
@@ -520,11 +560,10 @@ curl -b cookie -s -w "@format.txt.bak"
 		"magnet:?xt=urn:btih:9fc005370ae292f444f1d2a2af6a45a2b0827515&dn=%5BMagicStar%5D%20Cross%20Road%20~%20Kyuumei%20Kyuukyuu%20no%20Yakusoku%20~%20EP06%20%5BWEBDL%5D%20%5B1080p%5D%20%5BTELASA%5D%20%5BJPN_SUB%5D&tr=http%3A%2F%2Fnyaa.tracker.wf%3A7777%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce",
 		"magnet:?xt=urn:btih:79cdedd32bd81f8b4962f2dcc0770e21f38780fc&dn=%5BMagicStar%5D%20Cross%20Road%20~%20Kyuumei%20Kyuukyuu%20no%20Yakusoku%20~%20EP05%20%5BWEBDL%5D%20%5B1080p%5D%20%5BTELASA%5D%20%5BJPN_SUB%5D&tr=http%3A%2F%2Fnyaa.tracker.wf%3A7777%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce",
 		"magnet:?xt=urn:btih:7dae91619530b3f3d8d1bcaa3ebf9d634fd3fe3b&dn=%5BToonsHub%5D%20Chainsmoker%20Cat%20S01E09%201080p%20NF%20WEB-DL%20AAC2.0%20H.264%20%28Yani%20Neko%2C%20Multi-Subs%2C%20Uncensored%29&tr=http%3A%2F%2Fnyaa.tracker.wf%3A7777%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce",
-		"magnet:?xt=urn:btih:4f98fbe0dbd821c886164dbd206052cb1d75b701&dn=%5BErai-raws%5D%20Super%20no%20Ura%20de%20Yani%20Suu%20Futari%20-%2009%20%5B480p%20CR%20WEB-DL%20AVC%20AAC%5D%5BMultiSub%5D%5B7B630EEF%5D&tr=http%3A%2F%2Fnyaa.tracker.wf%3A7777%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce",
-		"magnet:?xt=urn:btih:08d144b5b834197f1ef546764c4edf3aaa863a26&dn=%5BErai-raws%5D%20Super%20no%20Ura%20de%20Yani%20Suu%20Futari%20-%2009%20%5B720p%20CR%20WEB-DL%20AVC%20AAC%5D%5BMultiSub%5D%5B9D598AE5%5D&tr=http%3A%2F%2Fnyaa.tracker.wf%3A7777%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce"
+		"magnet:?xt=urn:btih:4f98fbe0dbd821c886164dbd206052cb1d75b701&dn=%5BErai-raws%5D%20Super%20no%20Ura%20de%20Yani%20Suu%20Futari%20-%2009%20%5B480p%20CR%20WEB-DL%20AVC%20AAC%5D%5BMultiSub%5D%5B7B630EEF%5D&tr=http%3A%2F%2Fnyaa.tracker.wf%3A7777%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce"
 	]
 	}'
-$host:$port/api/qateel/add/probe/uris
+$host:$port/api/qateel/probe/uris
 
 
 curl -b cookie

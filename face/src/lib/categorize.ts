@@ -1,5 +1,5 @@
 import { writable } from 'svelte/store';
-import type { ItemMetaData } from '$lib/aria2/types';
+import type { Category, ItemMetaData, GidStatus } from '$lib/aria2/types';
 
 import DocumentSvg from "../assets/svgs/documents.svg"
 import Everything from "../assets/svgs/everything.svg"
@@ -22,21 +22,16 @@ import TorrentLight from "../assets/svgs/torrent-light.svg"
 import VideosLight from "../assets/svgs/videos-light.svg"
 import CompressedLight from "../assets/svgs/compressed-light.svg"
 
+export type DownloadCategory = 'everything' | Category;
+export type TableStatusFilter = "all" | GidStatus;
+
+export const statusFilters: TableStatusFilter[] = ["all", "active", "paused", "waiting", "complete", "seeding", "removed", "stopped", "error"];
 export const selectedCategory = writable<DownloadCategory>('everything');
-
-export type DownloadCategory =
-  | 'everything'
-  | 'torrent'
-  | 'music'
-  | 'photos'
-  | 'programs'
-  | 'videos'
-  | 'subtitles'
-  | 'compressed'
-  | 'others';
-
+export const selectedStatus = writable<TableStatusFilter>("all");
 
 export function getItemCategory(item: ItemMetaData): Exclude<DownloadCategory, 'everything'> {
+  if (item.category) return item.category;
+
   const itemName = (item.name ?? "").toLowerCase();
   const itemFiles = (item.files ?? "").toLowerCase();
 
@@ -91,6 +86,11 @@ export const downloadIcons = {
 
 /// Return download icons name, based on the mode
 export function getDownloadIconName(item: ItemMetaData) {
+	if (item.category) {
+		if (item.category === "others") return "other";
+		return item.category as keyof typeof downloadIcons;
+	}
+
 	const itemName = (item.name ?? "").toLowerCase();
 	const itemFiles = (item.files ?? "").toLowerCase();
 

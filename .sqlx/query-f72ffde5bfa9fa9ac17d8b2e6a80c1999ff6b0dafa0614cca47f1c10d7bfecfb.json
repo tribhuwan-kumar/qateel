@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\n\t\t\t\t\t\t\t\t\t\t\tSELECT gid\n\t\t\t\t\t\t\t\t\t\t\tFROM download_history\n\t\t\t\t\t\t\t\t\t\t\tWHERE name = ? AND dir = ? AND status != 'removed'\n\t\t\t\t\t\t\t\t\t\t",
+  "describe": {
+    "columns": [
+      {
+        "name": "gid",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f72ffde5bfa9fa9ac17d8b2e6a80c1999ff6b0dafa0614cca47f1c10d7bfecfb"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n                    INSERT INTO download_history (\n                        gid,\n                        user_id,\n                        kind,\n\t\t\t\t\t\tcategory,\n                        source_uri,\n                        status,\n\t\t\t\t\t\toptions,\n                        created_at,\n                        updated_at\n                        )\n                    SELECT\n\t\t\t\t\t\t?,\n\t\t\t\t\t\tuser_id,\n\t\t\t\t\t\tkind,\n\t\t\t\t\t\tcategory,\n\t\t\t\t\t\tsource_uri,\n\t\t\t\t\t\t'active',\n\t\t\t\t\t\toptions,\n\t\t\t\t\t\tCURRENT_TIMESTAMP,\n\t\t\t\t\t\tCURRENT_TIMESTAMP\n                    FROM download_history\n                    WHERE gid = ?\n                    ON CONFLICT(gid) DO NOTHING\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "50019292efa831c2471da7a7eb91c5ca523c06c55a6144dd949bbffe9e95117e"
+}

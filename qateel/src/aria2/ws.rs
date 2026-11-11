@@ -30,14 +30,22 @@ async fn global_stat(
     user: AuthenticatedUser
 ) {
     let mut rx = state.global_tx.subscribe();
-    while let Ok(msg) = rx.recv().await {
+    loop {
+        if rx.changed().await.is_err() {
+            break;
+        }
+
+        let msg = rx.borrow_and_update().clone();
+
         match &msg {
             GlobalStatWsMessage::Global { user_id, .. } => {
                 if *user_id == user.user_id {
                     let text = serde_json::to_string(&msg).unwrap_or_default();
                     if socket.send(
                         Message::Text(text.into())
-                    ).await.is_err() { break; }
+                    ).await.is_err() {
+						break;
+					}
                 }
             },
         }

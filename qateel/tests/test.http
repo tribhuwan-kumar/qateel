@@ -218,6 +218,22 @@ Content-Type: application/json"
 
 {
 	"jsonrpc": "2.0",
+		"id":"qateel",
+		"method": "aria2.addUri",
+		"params": [
+			"token:foobar",
+			["https://google.com"],
+		]
+}
+
+
+###
+#@aria2 addUri
+POST http://localhost:6800/jsonrpc
+Content-Type: application/json"
+
+{
+	"jsonrpc": "2.0",
 		"id": "qateel",
 		"method": "system.multicall",
 		"params": [[
@@ -228,7 +244,7 @@ Content-Type: application/json"
 					["magnet:?xt=urn:btih:50178C94DEE5CD9738B8CCFD4B582A1B53F9C8A2&dn=From+2022+S01E07+1080p+CATCHPLAY+WEB-DL+H+264+AAC-UBWEB&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fopen.demonii.com%3A1337%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&tr=udp%3A%2F%2Fvito-tracker.space%3A6969%2Fannounce&tr=udp%3A%2F%2Fvito-tracker.duckdns.org%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.theoks.net%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.srv00.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.qu.ax%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.corpscorp.online%3A80%2Fannounce"]
 				]
 			}
-		]]
+	]]
 }'
 
 
@@ -248,8 +264,8 @@ DELETE http://localhost:8080/api/qateel/gid/remove
 Content-Type: application/json
 
 {
-  "gids": ["2ad3c647483a59d6"],
-  "deleteFile": false
+	"gids": ["2ad3c647483a59d6"],
+		"deleteFile": false
 }
 
 
@@ -261,7 +277,7 @@ Content-Type: application/json
 X-CSRF-Token: {{decoded_csrf_token}}
 
 {
-  "gid": "000d0fab66f40b4c"
+	"gid": "000d0fab66f40b4c"
 }
 
 ###
@@ -272,8 +288,8 @@ Content-Type: application/json
 X-CSRF-Token: {{decoded_csrf_token}}
 
 {
-  "uris": ["https://worker-odd-art-9c42.lelota3786.workers.dev/53b87e707091a7a5fca1c84b455b201536493a97ba6b08a5a1074ad668a24a673505aac4b4c4a5f978c2e8f8a5d1f5f1c5d3d28f74cd6ab459e0e6363fc42d8abee1d5ac6731e361f14b5c3b295807b1058a9aefa208aac4fb95cc977b3ddcea50d2661a9e80e95108c605d7612217e3e687d1a7a260477af1589d587a0125af07bf6de6425b4603e641f124920170072b6cfac04519db9caf963c236b1ebe319805c83b21469869efc7c553ca1a93d2::b36e0861e86cbe23bd3d5f2fe349fc68/Casino.Jack.2010.1080P.Bluray.Hindi.English.Esubs.MoviesMod.zone.mkv"],
-  "options":{}
+	"uris": ["https://worker-odd-art-9c42.lelota3786.workers.dev/53b87e707091a7a5fca1c84b455b201536493a97ba6b08a5a1074ad668a24a673505aac4b4c4a5f978c2e8f8a5d1f5f1c5d3d28f74cd6ab459e0e6363fc42d8abee1d5ac6731e361f14b5c3b295807b1058a9aefa208aac4fb95cc977b3ddcea50d2661a9e80e95108c605d7612217e3e687d1a7a260477af1589d587a0125af07bf6de6425b4603e641f124920170072b6cfac04519db9caf963c236b1ebe319805c83b21469869efc7c553ca1a93d2::b36e0861e86cbe23bd3d5f2fe349fc68/Casino.Jack.2010.1080P.Bluray.Hindi.English.Esubs.MoviesMod.zone.mkv"],
+		"options":{}
 }
 
 ###
@@ -282,8 +298,8 @@ POST http://localhost:8080/api/auth/reg/admin
 Content-Type: application/json
 
 {
-  "username": "trasharia",
-  "password": "checkcheck"
+	"username": "trasharia",
+		"password": "checkcheck"
 }
 
 ###
@@ -298,9 +314,9 @@ POST http://localhost:8080/api/auth/create/user
 Content-Type: application/json
 
 {
-  "username": "heroher",
-  "password": "helpcheck",
-  "requesterUsername": "adminadmin"
+	"username": "heroher",
+		"password": "helpcheck",
+		"requesterUsername": "adminadmin"
 }
 
 ###
@@ -310,8 +326,8 @@ POST http://localhost:8080/api/auth/login
 Content-Type: application/json
 
 {
-  "username": "heroher",
-  "password": "helpaddaibi"
+	"username": "heroher",
+		"password": "helpaddaibi"
 }
 
 ###
@@ -323,7 +339,7 @@ Content-Type: application/json
 {
 
 	"targetUsername": "heroher",
-  "requesterUsername": "adminadmin"
+		"requesterUsername": "adminadmin"
 }
 
 
@@ -335,7 +351,7 @@ Content-Type: application/json
 X-CSRF-Token: {{decoded_token}}
 
 {
-  "gid": "33895440383f8b8f"
+	"gid": "33895440383f8b8f"
 }
 
 
@@ -371,8 +387,8 @@ Content-Type: application/json
 
 {
 	"username": "adminadmin",
-	"resetToken": "adminadmin:1780820812:c3dvGm3s6rHihX4TeYdxFfbJ0-86grvBpZno6NOuFa4",
-	"newPassword": "checkcheck"
+		"resetToken": "adminadmin:1780820812:c3dvGm3s6rHihX4TeYdxFfbJ0-86grvBpZno6NOuFa4",
+		"newPassword": "checkcheck"
 }
 
 
@@ -384,7 +400,7 @@ Content-Type: application/json
 
 {
 	"currentPassword": "checkchck",
-	"newPassword": "checkcheck"
+		"newPassword": "checkcheck"
 }
 
 ###
@@ -403,32 +419,32 @@ POST http://localhost:8080/api/auth/login
 Content-Type: application/json
 
 {
-  "username": "trasharia",
-  "password": "checkcheck"
+	"username": "trasharia",
+		"password": "checkcheck"
 }
 
 
 > {% lang=lua
-  client.global.csrf_token = response.cookies["csrf_token"].value
-  client.global.decoded_csrf_token = vim.uri_decode(client.global.csrf_token)
+	client.global.csrf_token = response.cookies["csrf_token"].value
+		client.global.decoded_csrf_token = vim.uri_decode(client.global.csrf_token)
 
-  client.global.auth_token = response.cookies["auth_token"].value
-  client.global.decoded_auth_token = vim.uri_decode(client.global.auth_token)
-%}
+		client.global.auth_token = response.cookies["auth_token"].value
+		client.global.decoded_auth_token = vim.uri_decode(client.global.auth_token)
+		%}
 
 
 ### Dashboard
-run #Authentication
-GET http://localhost:5173/dashboard
-Cookie: csrf_token={{decoded_csrf_token}}
+		run #Authentication
+		GET http://localhost:5173/dashboard
+		Cookie: csrf_token={{decoded_csrf_token}}
 
 
 ###
 #@qateel_set_cmd_options
 #@attach-cookie-jar
-POST http://localhost:8080/api/qateel/cmd/set/options
-Content-Type: application/json
-X-CSRF-Token: {{decoded_csrf_token}}
+		POST http://localhost:8080/api/qateel/cmd/set/options
+		Content-Type: application/json
+		X-CSRF-Token: {{decoded_csrf_token}}
 
 {
 	"options" : {

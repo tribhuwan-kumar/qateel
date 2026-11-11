@@ -7,6 +7,7 @@
 	import { checkAuth } from "$lib/auth/auth.svelte";
 	import { startAuthWorker, stopAuthWorker  } from "$lib/auth/auth.svelte";
   import { Toaster } from "$lib/components/ui/sonner/index.js";
+  import { historySort, loadHistorySort } from "$lib/sort";
 
 	let { children } = $props();
 
@@ -29,6 +30,7 @@
     document.getElementById("init-animation-style")?.remove();
     document.getElementById("init-loader-script")?.remove();
     getSysStatus();
+    historySort.set(loadHistorySort());
 
 		if (dev) {
 			import('eruda').then((eruda) => {
@@ -51,3 +53,4 @@
     <Toaster />
   </main>
 </div>
+

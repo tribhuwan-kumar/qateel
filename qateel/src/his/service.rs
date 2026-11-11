@@ -1,4 +1,5 @@
 use url::Url;
+use std::slice;
 use serde_json::Value;
 use std::path::PathBuf;
 use tokio::sync::broadcast;
@@ -20,17 +21,18 @@ use super::{
 
 use crate::{
     AppState,
+	aria2::proxy::MAX_MULTICALL_BATCH,
     aria2::types::{
         Kind,
         Aria2Res,
         TickTask,
+		Category,
         GidStatus,
         GlobalStat,
+		DlWsMessage,
         Aria2Options,
         ItemMetaData,
-        DdlWsMessage,
 		Aria2JsonRpcResp,
-        TorrentMagnetMeta,
 		GlobalStatWsMessage,
     }
 };
@@ -53,32 +55,52 @@ impl HistoryService {
         let state_e = state.clone();
         tokio::spawn(async move {
             info!("History event monitor is alive!!");
-            while let Ok(msg) = rx.recv().await {
-                debug!("Listend aria2 msg: {:?}", &msg);
-                if let Some(method) = msg.method {
-                    debug!("Listend aria2 method: {:?}", method);
-                    let gid = msg.params
-                        .as_ref()
-                        .and_then(|p| p.first())
-                        .and_then(|obj| obj.get("gid"))
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
+			loop {
+				match rx.recv().await {
+					Ok(msg) => {
+						debug!("Aria2 msg from event listener: {:?}", &msg);
+						if let Some(method) = msg.method {
+							debug!("Listend event for aria2 method: {:?}", method);
+							let gid = msg.params
+								.as_ref()
+								.and_then(|p| p.first())
+								.and_then(|obj| obj.get("gid"))
+								.and_then(|v| v.as_str())
+								.map(|s| s.to_string());
 
-                    if let Some(gid) = gid {
-						// Aria2 doesn't emit values on `onDownloadStop`, handling it manually
-                        if method == "aria2.onDownloadStop" {
-                            debug!("Stop event {:?} for gid {:?} - updating db manually", method, gid);
-                            Self::handle_event(&state_e, &gid, Some("stopped")).await;
-                        } else if method.starts_with("aria2.on") {
-                            debug!("Event {:?} for gid {:?}", method, gid);
-                            Self::refresh_gid(&state_e, gid).await;
-                        }
-                    } else if method.starts_with("aria2.on") {
-                        warn!("Received '{}' event but couldn't extract the gid", method);
-                    }
-                }
-            }
-        });
+							if let Some(gid) = gid {
+								let state_cln = state_e.clone();
+								// Aria2 doesn't emit values on `onDownloadStop`, handling it manually
+								tokio::spawn(async move {
+									if method == "aria2.onDownloadStop" {
+										debug!("Stop event {:?} for gid {:?}; updating db manually", method, gid);
+										Self::handle_event(&state_cln, slice::from_ref(&gid), Some(GidStatus::Stopped)).await;
+									} else if method == "aria2.onDownloadStart" {
+										let already_alive = state_cln.active_tasks.tasks.read().await.contains_key(&gid);
+										if !already_alive {
+											Self::refresh_gid(&state_cln, gid).await;
+										}
+									} else if method.starts_with("aria2.on") {
+										debug!("Updating event {:?} for gid {:?}", method, gid);
+										Self::refresh_gid(&state_cln, gid).await;
+									}
+								});
+							} else if method.starts_with("aria2.on") {
+								warn!("Received {:?} event but couldn't extract the gid", method);
+							}
+						}
+					}
+
+					Err(broadcast::error::RecvError::Lagged(skipped)) => {
+						warn!("History even listener lagged by {:?} messages; continuing listener", skipped);
+					}
+					Err(broadcast::error::RecvError::Closed) => {
+						warn!("History event listener channel closed; exiting monitor");
+						break;
+					}
+				}
+			}
+		});
 
         /*
           * I can't find any better way to avoid using polling, if you're reading this please fix it!!
@@ -92,106 +114,127 @@ impl HistoryService {
         });
     }
 
-	/// Send stas
+	/// Stream stuff
     async fn tick(state: &AppState) {
+		// Send stas
         let global_stat = match state.aria2.call("aria2.getGlobalStat", vec![]).await {
             Ok(json) => serde_json::from_value::<GlobalStat>(json).unwrap_or_default(),
             Err(_) => return,
         };
 
-		let active_tasks = {
+		let (gids, user_ids): (Vec<String>, HashSet<String>) = {
 			let tasks_guard = state.active_tasks.tasks.read().await;
-			tasks_guard.clone()
+			let gids = tasks_guard.keys().cloned().collect::<Vec<_>>();
+			let user_ids = tasks_guard
+				.values()
+				.filter_map(|item| {
+					if item.user_id.is_empty() {
+						None
+					} else {
+						Some(item.user_id.clone())
+					}
+				})
+			.collect::<HashSet<_>>();
+
+			(gids, user_ids)
 		};
 
-		if active_tasks.is_empty() {
+		if gids.is_empty() {
 			return;
 		}
 
         // Publish global stat per user in the current active set
-		let mut seen_users = HashSet::new();
-		for item in active_tasks.values() {
-			if seen_users.insert(item.user_id.clone()) {
-				let _ = state.global_tx.send(GlobalStatWsMessage::Global {
-					user_id: item.user_id.clone(),
-					data: global_stat.clone(),
-				});
-			}
+		for user_id in user_ids {
+			let _ = state.global_tx.send(GlobalStatWsMessage::Global {
+				user_id,
+				data: global_stat.clone(),
+			});
 		}
 
         // Get details of gid
-		let gids: Vec<String> = active_tasks.keys().cloned().collect();
 		let calls: Vec<Value> = gids
 			.iter()
 			.map(|gid| {
 				serde_json::json!({
 					"methodName": "aria2.tellStatus",
-					"params": [gid]
+					"params": [gid, [
+						"gid",
+						"dir",
+						"status",
+						"downloadSpeed",
+						"uploadSpeed",
+						"totalLength",
+						"completedLength",
+						"uploadLength",
+						"errorCode",
+						"errorMessage",
+						// "bitfield",
+						"infoHash",
+						"bittorrent",
+						"files",
+						"connections",
+						"numPieces",
+						"numSeeders",
+						"pieceLength",
+						"following",
+						"followedBy",
+						"belongsTo",
+						"seeder",
+						"verifiedLength",
+						"verifyIntegrityPending",
+					]]
 				})
 			})
 		.collect();
 
         if let Ok(response) = state.aria2.call("system.multicall", vec![serde_json::json!(calls)]).await {
-            if let Some(results) = response.as_array() {
+            if let serde_json::Value::Array(results) = response {
                 // Bundle group result to the `user_id`
                 let mut updates_by_user: HashMap<String, Vec<TickTask>> = HashMap::new();
 				// Free the evicted tasks from memory
 				let mut items_to_evict: Vec<String> = Vec::new();
                 /* Update the database on every 10 ticks */
-                for (i, result) in results.iter().enumerate() {
+                for (i, result) in results.into_iter().enumerate() {
 					let gid = &gids[i];
 
-                    if let Some(status_arr) = result.as_array() {
-                        debug!("Response from `tick`, aria2 tellStatus: {:?}", status_arr);
-                        if let Some(json_obj) = status_arr.first() {
-                            if let Ok(res) = serde_json::from_value::<Aria2Res>(json_obj.clone()) {
-                                let meta = ItemMetaData::extract(json_obj, gid);
-								if let Some(hydr_item) = state.active_tasks
-										.update_from_telemetry(gid, meta)
-										.await
-								{
-									// Construct `TickTask` using hydrated state
-									let tick_task = TickTask {
-										gid: hydr_item.gid.clone(),
-										name: hydr_item.name.clone(),
-										kind: hydr_item.kind.clone(),
-										status: hydr_item.status.clone(),
-										dir: hydr_item.dir.clone(),
-										source_uri: hydr_item.source_uri.clone(),
-										upload_length: hydr_item.upload_length.clone().unwrap_or_else(|| "0".to_string()),
-										completed_length: hydr_item.completed_length.clone().unwrap_or_else(|| "0".to_string()),
-										total_length: hydr_item.total_length.clone().unwrap_or_else(|| "0".to_string()),
-										verified_length: hydr_item.verified_length.clone(),
-										connections: hydr_item.connections.clone(),
-										num_seeders: hydr_item.num_seeders.clone(),
-										seeder: hydr_item.seeder.clone(),
-										verify_integrity_pending: hydr_item.verify_integrity_pending.clone(),
-										is_resume_supported: hydr_item.is_resume_supported.clone(),
-										files: hydr_item.files.clone(),
-										download_speed: res.download_speed,
-										upload_speed: res.upload_speed,
-									};
+                    if let serde_json::Value::Array(mut status_arr) = result {
+						if !status_arr.is_empty() {
+							let json_obj = status_arr.remove(0);
 
+							if let Ok(mut res) = serde_json::from_value::<Aria2Res>(json_obj) {
+								let upload_speed = std::mem::take(&mut res.upload_speed);
+								let download_speed = std::mem::take(&mut res.download_speed);
+								let num_seeders = res.num_seeders.take();
+								let connections = res.connections.take();
+
+								let meta = ItemMetaData::extract(res, gid);
+
+								if let Some((user_id, tick_task)) = state.active_tasks
+									.upsert_tick(gid, meta, upload_speed, download_speed, num_seeders, connections) .await
+								{
 									updates_by_user
-										.entry(hydr_item.user_id.clone())
+										.entry(user_id)
 										.or_default()
 										.push(tick_task.clone());
 
-									state.progress_buffer.add_update(tick_task).await;
-
-									if hydr_item.is_terminal() {
-										items_to_evict.push(gid.clone());
-									}
+									state.progress_buf.add_update(tick_task).await;
+								} else {
+									/*
+									  *  If `upsert_tick` returned None, means the task is either
+									  *  terminal or not streaming, so queue it for eviction.
+									*/
+									items_to_evict.push(gid.clone());
 								}
-                            }
-                        }
+							}
+						}
                     } else if let Some(code_val) = result.get("code").and_then(|v| v.as_i64()) {
                         debug!("Error from aria2 `tick`: {:?}, error code: {:?}", result.get("message"), code_val);
                         match code_val {
                             1 => {
+								// Emit the event
                                 debug!("GID: '{:?}' not found in current aria2 session, maybe aria2 restarted!!", gid);
-                                // Emit the event
-                                Self::handle_event(&state, gid, None).await;
+								Self::handle_event(state, slice::from_ref(gid), None).await;
+								state.active_tasks.remove(gid).await; // directly remove on error
                             },
                             code => {
                                 error!("Aria2 error for gid {}: code {}, msg: {:?}", gid, code, result.get("message"));
@@ -202,12 +245,36 @@ impl HistoryService {
 
                 // Forward bundles
                 for (user_id, tasks) in updates_by_user {
-                    let msg = DdlWsMessage::Tick {
+                    let msg = DlWsMessage::Tick {
                         user_id,
                         tasks,
                     };
+
                     let _ = state.history_tx.send(msg);
                 }
+
+				// Evict terminal tasks, persist their final status to db & spawn content hasher
+				for gid_to_remove in items_to_evict {
+					if let Some(final_meta) = state.active_tasks.remove(&gid_to_remove).await {
+						state.progress_buf.remove(&gid_to_remove).await;
+
+						debug!("Evicted terminal GID {:?} from active_tasks map; status is {:?}", gid_to_remove, final_meta.status);
+
+						let is_complete_or_seeding = (
+							final_meta.status == GidStatus::Complete
+							|| final_meta.status == GidStatus::Seeding
+						) && final_meta.content_hash.is_none();
+
+						let hash = final_meta.gid.clone();
+						let files = final_meta.files.clone();
+
+						Self::upsert_db(state, final_meta).await;
+
+						if is_complete_or_seeding {
+							spawn_content_hasher(state.clone(), hash, files);
+						}
+					}
+				}
             }
         }
     }
@@ -226,7 +293,7 @@ impl HistoryService {
 						Self::update_progress(&state).await;
 					}
 					_ = shutdown_rx.recv() => {
-						info!("Flush task received shutdown signal");
+						info!("Flushing progress buffer received shutdown signal.");
 						// Final update before exit
 						Self::update_progress(&state).await;
 						break;
@@ -237,7 +304,7 @@ impl HistoryService {
 	}
 
 	async fn update_progress(state: &AppState) {
-		let updates = state.progress_buffer.get_all_updates().await;
+		let updates = state.progress_buf.get_all_updates().await;
 
 		if updates.is_empty() {
 			return;
@@ -249,25 +316,33 @@ impl HistoryService {
 		let mut tx = match state.db.begin().await {
 			Ok(t) => t,
 			Err(e) => {
-				error!("Failed to begin transaction: {}", e);
+				error!("Failed to begin transaction: {:?}", e);
 				return;
 			}
 		};
 
 		for update in updates {
+			let still_streaming = {
+				let tasks_guard = state.active_tasks.tasks.read().await;
+				tasks_guard.get(&update.gid).map(|item| item.is_streaming()).unwrap_or(false)
+			};
+
+			if !still_streaming {
+				debug!("Skipping stale progress update for gid {:?} because it is no longer streaming.", update.gid);
+				continue;
+			}
+
 			let res = sqlx::query!(
 				r#"
 				UPDATE download_history SET
 					name = CASE WHEN ? IS NOT NULL THEN ? ELSE name END,
 					status = ?,
 					files = COALESCE(NULLIF(?, '[]'), files),
-					is_resume_supported = CASE WHEN is_resume_supported = 1 THEN 1 ELSE COALESCE(?, is_resume_supported) END,
+					is_resume_supported = CASE WHEN is_resume_supported = 'true' THEN 'true' ELSE COALESCE(?, is_resume_supported) END,
 					completed_length = ?,
 					total_length = ?,
 					upload_length = ?,
 					seeder = ?,
-					connections = ?,
-					num_seeders = ?,
 					verified_length = ?,
 					verify_integrity_pending = ?,
 					completed_at = CASE
@@ -288,8 +363,6 @@ impl HistoryService {
 				update.total_length,
 				update.upload_length,
 				update.seeder,
-				update.connections,
-				update.num_seeders,
 				update.verified_length,
 				update.verify_integrity_pending,
 				update.status,
@@ -300,12 +373,12 @@ impl HistoryService {
 			.await;
 
 			if let Err(e) = res {
-				error!("Failed to update progress for gid {}: {}", update.gid, e);
+				error!("Failed to update progress for gid {:?}: {:?}", update.gid, e);
 			}
 		}
 
 		if let Err(e) = tx.commit().await {
-			error!("Failed to commit progress update: {}", e);
+			error!("Failed to commit progress update: {:?}", e);
 		}
 	}
 
@@ -325,8 +398,8 @@ impl HistoryService {
         info!("Bootstrapping aria2 configurations from database...");
 		Self::bootstrap_cmd_options(&state).await;
 		Self::bootstrap_global_options(&state).await;
-		Self::restore_ddl(&state).await;
-		Self::bootstrap_gid_options(&state).await;
+		Self::restore_dl(&state).await;
+		// Self::bootstrap_gid_options(&state).await;
 
         /*
           * Check every status on init; anything can be changed
@@ -338,7 +411,7 @@ impl HistoryService {
             return;
         }
 
-        info!("Checking status of '{}' downloads...", active_map.len());
+        info!("Checking status of '{}' active downloads...", active_map.len());
 		let gids: Vec<String> = active_map.keys().cloned().collect();
         /*
           * Batch process in chunks prevent rpc timeout
@@ -356,24 +429,32 @@ impl HistoryService {
 
             match state.aria2.call("system.multicall", vec![serde_json::json!(calls)]).await {
                 Ok(response) => {
-                    if let Some(results) = response.as_array() {
-                        for (i, result) in results.iter().enumerate() {
+                    if let serde_json::Value::Array(results) = response {
+                        for (i, result) in results.into_iter().enumerate() {
 							let gid = &chunk[i];
-                            if let Some(status_array) = result.as_array() {
-                                if let Some(status_info) = status_array.first() {
-                                    // If gid found. update db
-                                    let meta = ItemMetaData::extract(status_info, gid);
-                                    debug!("Item meta data `sync_init`: {:?}", meta);
-									if let Some(mut hydrated_item) = state.active_tasks.update_from_telemetry(gid, meta).await {
-										// Sync status to database
-										Self::upsert_db(&state, &mut hydrated_item).await;
 
-										// Evict finished downloads from memory
-										if hydrated_item.is_terminal() {
-											state.active_tasks.remove(gid).await;
+                            if let serde_json::Value::Array(mut status_arr) = result {
+								if !status_arr.is_empty() {
+									let status_info = status_arr.remove(0);
+									if let Ok(info) = serde_json::from_value::<Aria2Res>(status_info)  {
+										// If gid found, update db
+										let meta = ItemMetaData::extract(info, gid);
+										if let Some((is_term, _)) = state.active_tasks.tele_status(gid, meta).await {
+											let meta = {
+												let guard = state.active_tasks.tasks.read().await;
+												guard.get(gid).cloned()
+											};
+											// Sync status to db
+											if let Some(metadata) = meta {
+												Self::upsert_db(&state, metadata).await;
+											}
+											// Evict terminal dls
+											if is_term {
+												state.active_tasks.remove(gid).await;
+											}
 										}
 									}
-                                }
+								}
                             } else if let Some(code_val) = result.get("code").and_then(|v| v.as_i64()) {
                                 // This means it was purged from memory or removed externally
                                 debug!("Error from aria2 `sync_init`: {:?}, error code: {:?}", result.get("message"), code_val);
@@ -396,67 +477,93 @@ impl HistoryService {
         info!("Sync complete...");
     }
 
-    /// Refresh gid on aria2 event notifications
+    /// Refresh gid in db, calling when needed
     pub async fn refresh_gid(state: &AppState, gid: String) {
         info!("Refreshing gid: {:?}", gid);
         let params = vec![serde_json::json!(gid)];
-        if let Ok(info) = state.aria2.call("aria2.tellStatus", params).await {
-            /* Handle child gid */
+        if let Ok(json_value) = state.aria2.call("aria2.tellStatus", params).await {
+			let info: Aria2Res = match serde_json::from_value(json_value) {
+				Ok(v) => v,
+				Err(e) => {
+					error!("Failed to parse aria2 status during refresh for GID '{:?}': {:?}", gid, e);
+					return;
+				}
+			};
+
+            /* Handle parent, child gid */
             Self::handle_inheritance(state, &gid, &info).await;
 
-            let mut meta = ItemMetaData::extract(&info, &gid);
-            Self::upsert_db(state, &mut meta).await;
+            let meta = ItemMetaData::extract(info, &gid);
+
+			let is_complete_or_seeding = (
+				meta.status == GidStatus::Complete
+				|| meta.status == GidStatus::Seeding
+			) && meta.content_hash.is_none();
+
+			let hash = meta.gid.clone();
+            let files = meta.files.clone();
+
+			/* Update the db */
+            Self::upsert_db(state, meta).await;
 
             /* Spawn content hasher after complete download */
-            if (meta.status == GidStatus::Complete || meta.status == GidStatus::Seeding) && meta.content_hash.is_none() {
-                spawn_content_hasher(state.clone(), meta.gid.clone(), meta.files.clone());
+			if is_complete_or_seeding {
+                spawn_content_hasher(state.clone(), hash, files);
             }
-            debug!("Refreshed extracted meta: {:?}", meta);
         }
     }
 
-    /// Called on aria2 event notifications
-    async fn upsert_db(state: &AppState, meta: &mut ItemMetaData) {
-        debug!("Status from `upsert_db`: name: {:?}, gid: {:?}, status: {:?}",
-			meta.name, meta.gid, meta.status);
+    /// Called on aria2 event notifications, updating volatile vars
+    async fn upsert_db(state: &AppState, mut meta: ItemMetaData) {
+        debug!("Status from `upsert_db`: name: {:?}, gid: {:?}, status: {:?}", meta.name, meta.gid, meta.status);
+		if meta.is_streaming() {
+			state.active_tasks.insert(meta.gid.clone(), meta.clone()).await;
+		} else {
+			state.active_tasks.remove(&meta.gid).await;
+			state.progress_buf.remove(&meta.gid).await;
+		}
         let res = sqlx::query!(
             r#"
 				UPDATE download_history
 				SET
-					name = CASE WHEN ? IS NOT NULL THEN ? ELSE name END,
-					status = ?,
-					dir = COALESCE(NULLIF(?, ''), dir),
-					files = COALESCE(NULLIF(?, '[]'), files),
-					total_length = COALESCE(NULLIF(?, '0'), total_length),
-					completed_length = COALESCE(NULLIF(?, '0'), completed_length),
-					upload_length = COALESCE(NULLIF(?, '0'), upload_length),
-					source_uri = COALESCE(NULLIF(?, ''), source_uri),
-					info_hash = COALESCE(NULLIF(?, ''), info_hash),
-					seeder = ?,
-					content_hash = COALESCE(NULLIF(?, ''), content_hash),
-					error_code = ?,
-					error_message = ?,
-					torrent = COALESCE(?, torrent),
-					options = COALESCE(?, options),
-					is_resume_supported = CASE WHEN is_resume_supported = 1 THEN 1 ELSE COALESCE(?, is_resume_supported) END,
-					connections = ?,
-					num_pieces = COALESCE(NULLIF(?, '0'), num_pieces),
-					num_seeders = ?,
-					piece_length = COALESCE(NULLIF(?, '0'), piece_length),
-					verified_length = COALESCE(NULLIF(?, '0'), verified_length),
-					verify_integrity_pending = ?,
+					name = CASE WHEN $1 IS NOT NULL THEN $1 ELSE name END,
+					status = $2,
+					dir = COALESCE(NULLIF($3, ''), dir),
+					files = COALESCE(NULLIF($4, '[]'), files),
+					total_length = COALESCE(NULLIF($5, '0'), total_length),
+					completed_length = COALESCE(NULLIF($6, '0'), completed_length),
+					upload_length = COALESCE(NULLIF($7, '0'), upload_length),
+					source_uri = COALESCE(NULLIF($8, ''), source_uri),
+					info_hash = COALESCE(NULLIF($9, ''), info_hash),
+					content_hash = COALESCE(NULLIF($10, ''), content_hash),
+					num_pieces = COALESCE(NULLIF($11, '0'), num_pieces),
+					piece_length = COALESCE(NULLIF($12, '0'), piece_length),
+					is_resume_supported = CASE WHEN is_resume_supported = 'true' THEN 'true' ELSE COALESCE($13, is_resume_supported) END,
+					verified_length = COALESCE(NULLIF($14, '0'), verified_length),
+					torrent = COALESCE($15, torrent),
+					options = COALESCE($16, options),
+					seeder = $17,
+					error_code = $18,
+					error_message = $19,
+					verify_integrity_pending = $20,
 					completed_at = CASE
-						WHEN ? = 'complete' OR
-							 ? = 'seeding'
+						WHEN $2 = 'complete' OR
+							 $2 = 'seeding'
 							 THEN COALESCE(completed_at, CURRENT_TIMESTAMP)
 						ELSE NULL
-				END,
+					END,
 					updated_at = CURRENT_TIMESTAMP
-				WHERE gid = ?
-				RETURNING user_id, created_at, completed_at
+				WHERE gid = $21
+				RETURNING
+					user_id,
+					name,
+					source_uri,
+					created_at,
+					completed_at,
+					kind as "kind: Kind",
+					category as "category: Category"
             "#,
             meta.name,
-			meta.name,
             meta.status,
             meta.dir,
             meta.files,
@@ -465,21 +572,17 @@ impl HistoryService {
             meta.upload_length,
             meta.source_uri,
             meta.info_hash,
-            meta.seeder,
 			meta.content_hash,
-            meta.error_code,
-            meta.error_message,
+			meta.num_pieces,
+			meta.piece_length,
+			meta.is_resume_supported,
+			meta.verified_length,
 			meta.torrent,
 			meta.options,
-			meta.is_resume_supported,
-			meta.connections,
-			meta.num_pieces,
-			meta.num_seeders,
-			meta.piece_length,
-			meta.verified_length,
-			meta.verified_length,
-            meta.status,
-            meta.status,
+			meta.seeder,
+			meta.error_code,
+			meta.error_message,
+			meta.verify_integrity_pending,
             meta.gid
         )
         .fetch_optional(&state.db)
@@ -487,15 +590,28 @@ impl HistoryService {
 
         match res {
             Ok(Some(row)) => {
-                meta.user_id = row.user_id.clone();
+				meta.user_id = row.user_id;
                 meta.created_at = row.created_at;
                 meta.completed_at = row.completed_at;
+                meta.kind = row.kind;
+
+                if meta.category.is_none() { meta.category = row.category }
+                if meta.name.is_none() { meta.name = row.name; }
+                if meta.source_uri.is_none() { meta.source_uri = row.source_uri; }
+
+				/* Insert into or remove from `ActiveTasks` based on status */
+                if meta.is_streaming() {
+                    state.active_tasks.insert(meta.gid.clone(), meta.clone()).await;
+                } else {
+                    state.active_tasks.remove(&meta.gid).await;
+                }
+
                 /* Send on global channel */
-                let msg = DdlWsMessage::Event {
-                    user_id: row.user_id,
-                    data: meta.clone(),
+                let msg = DlWsMessage::Event {
+                    user_id: meta.user_id.clone(),
+                    data: vec![meta],
                 };
-                debug!("Item metadata `upsert_db`: {:?}", msg);
+
                 let _ = state.history_tx.send(msg);
             },
             Ok(None) => {
@@ -509,74 +625,119 @@ impl HistoryService {
 	/// Because aria2 doesn't emits evets for some status
     pub async fn handle_event(
         state: &AppState,
-        gid: &str,
-        status: Option<&str>
+        gids: &[String],
+        status: Option<GidStatus>
     ) {
-		state.progress_buffer.remove(&gid).await;
+		if gids.is_empty() {
+			return;
+		}
+		/*
+		  *  Terminal & manual events must evict
+				immediately to stop stale tick & progress updates
+		*/
+		if !matches!(status, Some(GidStatus::Active) | Some(GidStatus::Seeding)) {
+			for gid in gids {
+				// Remove from active task & progress updater
+				state.active_tasks.remove(gid).await;
+				state.progress_buf.remove(gid).await;
+			}
+		}
 
-        let res = sqlx::query_as!(
-            ItemMetaData,
-            r#"
-				UPDATE download_history
-				SET
-					status = COALESCE($1, status),
-					updated_at = CASE WHEN $1 IS NOT NULL THEN CURRENT_TIMESTAMP ELSE updated_at END
-				WHERE gid = $2
-				RETURNING
-					gid,
-					name,
-					kind as "kind: Kind",
-					status as "status: GidStatus",
-					dir,
-					files,
-					total_length,
-					completed_length,
-					upload_length,
-					source_uri,
-					info_hash,
-					seeder,
-					content_hash,
-					error_code,
-					error_message,
-					torrent as "torrent: sqlx::types::Json<TorrentMagnetMeta>",
-					options,
-					is_resume_supported,
-					connections,
-					num_pieces,
-					num_seeders,
-					piece_length,
-					verified_length,
-					verify_integrity_pending,
-					created_at,
-					completed_at,
-					user_id
-            "#,
-            status,
-            gid
-        )
-        .fetch_optional(&state.db)
-        .await;
+		let status_str = status.as_ref().map(|s| match s {
+			GidStatus::Paused => "paused",
+			GidStatus::Waiting => "waiting",
+			GidStatus::Stopped => "stopped",
+			GidStatus::Active => "active",
+			GidStatus::Complete => "complete",
+			GidStatus::Error => "error",
+			GidStatus::Removed => "removed",
+			GidStatus::Seeding => "seeding",
+		});
 
-        match res {
-            Ok(Some(meta)) => {
-                /* Broadcast the manual update so the ui turns "stopped" immediately */
-                let msg = DdlWsMessage::Event {
-                    user_id: meta.user_id.clone(),
-                    data: meta,
-                };
-                let _ = state.history_tx.send(msg);
-            },
-            Ok(None) => warn!("Received {:?} event for unknown or already deleted gid: '{}'", status, gid),
-            Err(e) => error!("Failed to emit event: '{}': '{}'", gid, e),
-        }
+		for chunk in gids.chunks(MAX_MULTICALL_BATCH) {
+			let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+        	    "UPDATE download_history SET status = COALESCE("
+			);
+        	qb.push_bind(status_str);
+        	qb.push(", status), updated_at = CURRENT_TIMESTAMP WHERE gid IN (");
+
+        	let mut separated = qb.separated(", ");
+
+        	for gid in chunk {
+				separated.push_bind(gid);
+			}
+
+			separated.push_unseparated( ") RETURNING
+				gid,
+				name,
+				kind,
+				category,
+				status,
+				dir,
+				files,
+				total_length,
+				completed_length,
+				upload_length,
+				source_uri,
+				info_hash,
+				seeder,
+				content_hash,
+				error_code,
+				error_message,
+				torrent,
+				options,
+				is_resume_supported,
+				num_pieces,
+				piece_length,
+				verified_length,
+				verify_integrity_pending,
+				created_at,
+				completed_at,
+				user_id"
+			);
+
+			match qb.build_query_as::<ItemMetaData>().fetch_all(&state.db).await {
+				Ok(updated_rows) => {
+					let mut by_user: HashMap<String, Vec<ItemMetaData>> = HashMap::new();
+
+					for meta in updated_rows {
+						let gid = meta.gid.clone();
+
+						// Sync active tasks
+						if matches!(status, Some(GidStatus::Active) | Some(GidStatus::Seeding)) {
+							state.active_tasks.insert(gid.clone(), meta.clone()).await;
+						} else {
+							state.active_tasks.remove(&gid).await;
+							state.progress_buf.remove(&gid).await;
+						}
+
+						by_user.entry(meta.user_id.clone()).or_default().push(meta);
+					}
+
+					for (user_id, items) in by_user {
+						let msg = DlWsMessage::Event{
+							user_id,
+							data: items,
+						};
+
+						let _ = state.history_tx.send(msg);
+					}
+
+				}
+				Err(e) => {
+					error!("Failed to batch update download status: {}", e);
+				}
+			}
+		}
     }
 
     /// Handles gid linking for parent -><- child transitions
     pub async fn handle_inheritance(
         state: &AppState,
         current_gid: &str,
-        info: &serde_json::Value										// `aria2.tellStatus` res
+        info: &Aria2Res
     ) {
+		let info = serde_json::to_value(info).unwrap_or_default();
         if let Some(children) = info.get("followedBy").and_then(|v| v.as_array()) {
             for child in children {
                 if let Some(child_gid) = child.as_str() {
@@ -586,15 +747,18 @@ impl HistoryService {
                                 gid,
                                 user_id,
                                 kind,
+								category,
                                 source_uri,
                                 status,
 								options,
                                 created_at,
                                 updated_at
                             )
-                            SELECT ?,
+                            SELECT
+								?,
                                 user_id,
                                 kind,
+								category,
                                 source_uri,
                                 'waiting',
 								options,
@@ -612,7 +776,7 @@ impl HistoryService {
 
                     if let Ok(r) = res {
                         if r.rows_affected() > 0 {
-                            info!("Forward inheritance: Parent {} spawned Child {}", current_gid, child_gid);
+                            info!("Forward inheritance: Parent {:?} spawned child {:?}", current_gid, child_gid);
                         }
                     }
                 }
@@ -626,6 +790,7 @@ impl HistoryService {
                         gid,
                         user_id,
                         kind,
+						category,
                         source_uri,
                         status,
 						options,
@@ -633,14 +798,15 @@ impl HistoryService {
                         updated_at
                         )
                     SELECT
-					?,
-                    user_id,
-                    kind,
-                    source_uri,
-                    'active',
-					options,
-                    CURRENT_TIMESTAMP,
-                    CURRENT_TIMESTAMP
+						?,
+						user_id,
+						kind,
+						category,
+						source_uri,
+						'active',
+						options,
+						CURRENT_TIMESTAMP,
+						CURRENT_TIMESTAMP
                     FROM download_history
                     WHERE gid = ?
                     ON CONFLICT(gid) DO NOTHING
@@ -652,7 +818,7 @@ impl HistoryService {
 
             if let Ok(r) = res {
                 if r.rows_affected() > 0 {
-                    info!("Reverse Inheritance: Child {} copied context from Parent {}", current_gid, parent_gid);
+                    info!("Reverse inheritance: Child {:?} copied context from parent {:?}", current_gid, parent_gid);
                 }
             }
         }
@@ -676,6 +842,7 @@ impl HistoryService {
         }
 	}
 
+	#[allow(unused)]
 	async fn bootstrap_gid_options(state: &AppState) {
         let records = sqlx::query!(
             r#"
@@ -698,7 +865,10 @@ impl HistoryService {
         )
         .fetch_all(&state.db)
         .await
-        .unwrap_or_default();
+		.unwrap_or_else(|err| {
+			error!("Failed to query to bootstrap gid options: {:?}", err);
+			Vec::new()
+		});
 
         if !records.is_empty() {
             let mut calls: Vec<Value> = Vec::new();
@@ -743,7 +913,7 @@ impl HistoryService {
 		}
 	}
 
-	async fn restore_ddl(state: &AppState) {
+	async fn restore_dl(state: &AppState) {
         info!("Restoring interrupted downloads into Aria2...");
         // Fetch  active, waiting, paused, seeding  downloads, including kind and info_hash
 		let records: Vec<ItemMetaData> = sqlx::query_as!(
@@ -753,6 +923,7 @@ impl HistoryService {
 					gid,
 					name,
 					kind as "kind: Kind",
+					category as "category: Category",
 					status as "status: GidStatus",
 					dir,
 					files,
@@ -765,12 +936,10 @@ impl HistoryService {
 					content_hash,
 					error_code,
 					error_message,
-					torrent as "torrent: sqlx::types::Json<TorrentMagnetMeta>",
+					torrent,
 					options,
 					is_resume_supported,
-					connections,
 					num_pieces,
-					num_seeders,
 					piece_length,
 					verified_length,
 					verify_integrity_pending,
@@ -780,7 +949,10 @@ impl HistoryService {
 				FROM download_history
 				WHERE status IN ('active', 'waiting', 'paused', 'seeding')
 			"#
-		).fetch_all(&state.db).await.unwrap_or_default();
+		).fetch_all(&state.db).await.unwrap_or_else(|e| {
+			error!("Failed to query to restore downloads: {:?}", e);
+			Vec::new()
+		});
 
         if records.is_empty() {
             info!("No interrupted downloads to restore.");
@@ -791,14 +963,15 @@ impl HistoryService {
 		let mut unresumable_gids: Vec<String> = Vec::new();
 
         for row in records {
-			if row.is_resume_supported == Some(false) {
-				unresumable_gids.push(row.gid.clone());
-				continue;
+			if let Some(is_resume_supported) = row.is_resume_supported_bool() {
+				if is_resume_supported == false {
+					unresumable_gids.push(row.gid.clone());
+					continue;
+				}
 			}
 
-            let mut opts = if let Some(opts_str) = row.options.clone() {
-                serde_json::from_str::<serde_json::Map<String, Value>>(&opts_str)
-                    .unwrap_or_default()
+            let mut opts = if let Some(opts_str) = row.options.as_ref() {
+                serde_json::from_str::<serde_json::Map<String, Value>>(&opts_str).unwrap_or_default()
             } else {
                 serde_json::Map::new()
             };
@@ -832,7 +1005,7 @@ impl HistoryService {
 
 				if !staged_for_restore {
 					// `user_id-info_hash.torrent` format
-					// Most likely ther would be a info hash,
+					// Most likely there would be a info hash,
 					// If it panics, it panics
 					let torrent_path = state.config.data_dir
 							.join("torrents")
@@ -845,7 +1018,9 @@ impl HistoryService {
 								"methodName": "aria2.addTorrent",
 								"params": [b64, Vec::<String>::new(), opts]
 							}));
+
 						staged_for_restore = true;
+
 						} else {
 							error!("Found torrent file but lack read permissions: {:?}", torrent_path);
 						}
@@ -862,14 +1037,18 @@ impl HistoryService {
                     }));
 
 					staged_for_restore = true;
+
                 } else {
                     warn!("Can't restore URI for GID {:?}: Missing `source_uri`", row.gid);
                 }
             }
 
-			if staged_for_restore {
-				state.active_tasks.insert(row.gid.clone(), row).await;
-			}
+            if staged_for_restore {
+                if row.is_streaming() {
+                    state.active_tasks.insert(row.gid.clone(), row.clone()).await;
+					debug!("Restoring interrupted DLs.");
+                }
+            }
         }
 
         if !unresumable_gids.is_empty() {
@@ -980,7 +1159,7 @@ impl HistoryService {
 												for row in rows {
 													let _ = &state_clone.aria2.call("aria2.forceRemove", vec![serde_json::json!(&row.gid)]).await;
 													sleep(Duration::from_millis(500)).await;
-													Self::handle_event(&state_clone, &row.gid, Some("removed")).await;
+													Self::handle_event(&state_clone, slice::from_ref(&row.gid), Some(GidStatus::Removed)).await;
 												}
 											}
 											Err(e) => {
@@ -1003,6 +1182,5 @@ impl HistoryService {
 			}
 		});
 	}
-
 }
 

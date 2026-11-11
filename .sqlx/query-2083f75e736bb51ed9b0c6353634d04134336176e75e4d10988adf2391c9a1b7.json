@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n\t\t\t\t\t\t\t\tINSERT INTO download_history\n\t\t\t\t\t\t\t\t(gid, user_id, kind, category, status, name, source_uri, total_length, is_resume_supported)\n\t\t\t\t\t\t\t\tVALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)\n\t\t\t\t\t\t\t",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": []
+  },
+  "hash": "2083f75e736bb51ed9b0c6353634d04134336176e75e4d10988adf2391c9a1b7"
+}

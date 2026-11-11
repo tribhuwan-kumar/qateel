@@ -1,11 +1,17 @@
 <script lang="ts">
-  import { formatSpeed } from "$lib/utils";
+	import { onMount } from "svelte";
+	import { mode } from "mode-watcher";
+	import { toast } from "svelte-sonner";
+  import { formatSpeed, formatBytes } from "$lib/utils";
   import { systemState } from '$lib/system';
+	import { historySort, loadHistorySort } from "$lib/sort";
+	import { type SortBy, type Order, type HistorySort } from '$lib/sort';
   import { Badge } from "$lib/components/ui/badge";
   import { HugeiconsIcon } from "@hugeicons/svelte";
   import { Button } from "$lib/components/ui/button";
 	import AddDl from '$lib/components/AddDl.svelte';
   import * as Dialog from "$lib/components/ui/dialog";
+	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import { JsonView } from '@zerodevx/svelte-json-view'
   import { Label } from "$lib/components/ui/label/index.js";
   import { Checkbox } from "$lib/components/ui/checkbox/index.js";
@@ -15,26 +21,42 @@
     aria2,
 		aria2Store,
   } from '$lib/aria2/client.svelte';
-  import {
-    selectedGids,
-    clearSelection,
-  } from '$lib/selection';
+	import { selectedCategory, selectedStatus } from "$lib/categorize";
+	import {
+		selectedGids,
+			selectedTotalBytes,
+			clearSelection,
+			setSelection,
+	} from '$lib/selection';
 	import {
 		CodeIcon,
     PlayIcon,
     ListXIcon,
     PauseIcon,
+		AlphaIcon,
+		Time04Icon,
 		Menu04Icon,
     Search02Icon,
     Cancel02Icon,
+		Select02Icon,
     Delete02Icon,
 		PlusSignIcon,
 		Sorting05Icon,
+		ArrowUp04Icon,
+		FloppyDiskIcon,
+		ArrowDown04Icon,
+		CancelSquareIcon,
     ArrowUpDoubleIcon,
     ArrowDownDoubleIcon,
     CheckmarkBadge03Icon,
+		CircleArrowReload02Icon,
   } from '@hugeicons/core-free-icons';
+	import Up from "../../assets/svgs/up.svg";
+	import Down from "../../assets/svgs/down.svg";
+	import UpLight from "../../assets/svgs/up-light.svg";
+	import DownLight from "../../assets/svgs/down-light.svg";
 
+	let isDarkMode = $state(false);
   let count = $derived($selectedGids.length);
   let globalStats = $derived(aria2Store.global);
   let hasSelection = $derived(count > 0);
@@ -53,14 +75,35 @@
   let showGlobalStatsDialog = $state(false);
   let globalStatsView: "table" | "json" = $state("table");
 
+  let sortMenuRef: HTMLDivElement | null = null;
+  let sortMenuOpen = $state(false);
+	let tempSortBy = $state<SortBy>("time");
+	let tempOrder = $state<Order>("desc");
+
+  const sortOptions: Array<{ key: SortBy; label: string }> = [
+    { key: "time", label: "Time" },
+    { key: "name", label: "Name" },
+    { key: "size", label: "Size" },
+  ];
+
+  const globalStatLabels: Record<string, string> = {
+		downloadSpeed: "Download speed",
+		uploadSpeed: "Upload speed",
+		numActive: "Active",
+		numStopped: "Stopped",
+		numStoppedTotal: "Stopped total",
+		numWaiting: "Waiting"
+  };
+
   function handleAdd() {
     addDialogOpen = true;
   }
 
-  // Only `paused` and `stopped` gets resumed
+  // Only `paused` gets resumed
   async function handleResume() {
-    const targets = selectedItems.filter(i => ['paused', 'stopped'].includes(i.status));
+    const targets = selectedItems.filter(i => ['paused'].includes(i.status));
 		const gids = targets.map(i => (i.gid));
+		console.log("Resuming gids:", gids);
     await aria2.resume(gids);
     clearSelection();
   }
@@ -75,14 +118,15 @@
   }
 
   // Stopping -> removing from queue, freeing aria2 memory
+	// 'active', 'seeding', 'waiting', 'paused', 'error' can be stopped
   async function handleStop() {
-    const targets = selectedItems.filter(i => ['active', 'waiting', 'paused', 'error'].includes(i.status));
+    const targets = selectedItems.filter(i => ['active', 'seeding', 'waiting', 'paused', 'error'].includes(i.status));
 		const gids = targets.map(i => (i.gid));
 		await aria2.stop(gids);
     clearSelection();
   }
 
-  /// Remove -> Delete
+  /// Removed status means file allocation deleted
   function promptDelete() {
     if ($selectedGids.length === 0) return;
     gidsToDelete = $selectedGids;
@@ -100,54 +144,158 @@
 		searchDialogOpen = true;
   }
 
-  function handleSort() {
+	function prettyKey(key: string) {
+		return (
+			globalStatLabels[key] ??
+			key.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replaceAll("_", " ")
+		);
+	}
 
-  }
-
-  const globalStatLabels: Record<string, string> = {
-      downloadSpeed: "Download speed",
-      uploadSpeed: "Upload speed",
-      numActive: "Active",
-      numStopped: "Stopped",
-      numStoppedTotal: "Stopped total",
-      numWaiting: "Waiting"
-  };
-
-  function prettyKey(key: string) {
-      return (
-          globalStatLabels[key] ??
-          key.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replaceAll("_", " ")
-      );
-  }
-
-  function formatGlobalStatValue(key: string, value: unknown) {
-      if (key.toLowerCase().includes("speed")) {
-          if (value === null || value === undefined || value === "" || value === "0") {
-              return "0 KiB/s";
-          }
-          return formatSpeed(value as string);
-      }
-      if (value === null || value === undefined || value === "") return "—";
-      return String(value);
-  }
+	function formatGlobalStatValue(key: string, value: unknown) {
+		if (key.toLowerCase().includes("speed")) {
+			if (value === null || value === undefined || value === "" || value === "0") {
+				return "0 KiB/s";
+			}
+			return formatSpeed(value as string);
+		}
+		if (value === null || value === undefined || value === "") return "—";
+		return String(value);
+	}
 
   function openGlobalStatsDialog() {
       globalStatsView = "table";
       showGlobalStatsDialog = true;
   }
 
+  function toggleOrder() {
+    tempOrder = tempOrder === "asc" ? "desc" : "asc";
+    historySort.set({
+      sortBy: tempSortBy,
+      order: tempOrder,
+    });
+    sortMenuOpen = false;
+  }
+
+  function selectSort(next: SortBy) {
+    tempSortBy = next;
+    historySort.set({
+      sortBy: tempSortBy,
+      order: tempOrder,
+    });
+    sortMenuOpen = false;
+  }
+
+	async function handleSelectAll() {
+		if (hasSelection) {
+			clearSelection();
+			return;
+		}
+		// If local items already contain everything, use them immediately
+		if (aria2Store.items.length > 0) {
+			const allItems = await aria2.getAllHistory($selectedStatus, $selectedCategory);
+			if (allItems.length > 0) {
+				setSelection(allItems.map(i => ({ gid: i.gid, totalLength: i.totalLength})));
+			} else {
+				setSelection(aria2Store.items.map(i => ({ gid: i.gid, totalLength: i.totalLength })));
+			}
+		}
+	}
+
+  function getVisibleOrderAsset() {
+    // keep your required behavior:
+    // asc => down icon visible
+    // desc => up icon visible
+    if (tempOrder === "asc") {
+      return isDarkMode ? DownLight : Down;
+    }
+
+    return isDarkMode ? UpLight : Up;
+  }
 
   $effect(() => {
-      console.log("Aria2 alive:", isAria2Alive);
+		const savedMode = localStorage.getItem("mode-watcher-mode");
+		if (mode.current === "dark" || savedMode === "dark") {
+			isDarkMode = true;
+		} else {
+			isDarkMode = false;
+		}
+
+		console.log("Aria2 alive:", isAria2Alive);
+  });
+
+  function syncTheme() {
+    const savedMode = localStorage.getItem("mode-watcher-mode");
+    isDarkMode = mode.current === "dark" || savedMode === "dark";
+  }
+
+  function syncFromStore(value: HistorySort) {
+    tempSortBy = value.sortBy;
+    tempOrder = value.order;
+  }
+
+	// async function handleStopAll() {
+	// 	if (hasSelection) {
+	// 		clearSelection();
+	// 		return;
+	// 	}
+	// 	// If local items already contain everything, use them immediately
+	// 	if (aria2Store.items.length > 0) {
+	// 		const allItems = await aria2.getAllHistory("all", "everything");
+	// 		const targetItems = allItems.length > 0 ? allItems : aria2Store.items;
+	// 		const pauseableItems = targetItems.filter(i => ['active', 'waiting'].includes(i.status));
+	// 		if (pauseableItems.length > 0) {
+	// 			const gids = pauseableItems.map(i => (i.gid));
+	// 			// Do the `forcePause`
+	// 			await aria2.pause(gids, true);
+	// 		} else {
+	// 			toast.info(`No active or waiting gid to pause!!`, {
+	// 				richColors: true,
+	// 				style: "cursor: pointer;"
+	// 			});
+	// 		}
+	// 	}
+	// }
+
+  onMount(() => {
+    syncTheme();
+    const saved = loadHistorySort();
+    syncFromStore(saved);
+    historySort.set(saved);
+
+    const handleOutsideClick = (event: MouseEvent) => {
+      if (!sortMenuRef) return;
+      if (!sortMenuRef.contains(event.target as Node)) {
+        sortMenuOpen = false;
+      }
+    };
+
+    const unsubscribe = historySort.subscribe((value) => {
+      syncFromStore(value);
+    });
+
+    document.addEventListener("pointerdown", handleOutsideClick);
+
+    return () => {
+      unsubscribe();
+      document.removeEventListener("pointerdown", handleOutsideClick);
+    };
   });
 </script>
 
 
-<div class="bg-background/95 backdrop-blur z-1 supports-backdrop-filter:bg-background/90 dark:supports-backdrop-filter:bg-background/60 sticky top-0 w-full">
+<div class="bg-background/95 backdrop-blur z-10 supports-backdrop-filter:bg-background/90
+	dark:supports-backdrop-filter:bg-background/60 sticky top-0 w-full"
+>
 	<div class="inline-flex flex-row">
 		<SidebarUI.Trigger
-			class="m-2 text-muted-foreground bg-background/95 backdrop-blur
-				dark:supports-backdrop-filter:bg-background/60 supports-backdrop-filter:bg-background/90 sticky top-0 cursor-pointer"
+			class={`m-2 sm:hidden text-muted-foreground bg-background/95 backdrop-blur
+				dark:supports-backdrop-filter:bg-background/60 supports-backdrop-filter:bg-background/90 sticky top-0
+				cursor-pointer ${hasSelection ? "hidden" : ""}`}
+		/>
+		<SidebarUI.Trigger
+			class={`m-2 max-sm:hidden text-muted-foreground bg-background/95 backdrop-blur
+				dark:supports-backdrop-filter:bg-background/60 supports-backdrop-filter:bg-background/90 sticky top-0
+				cursor-pointer`}
 		/>
 		<div class="hidden sm:inline-flex justify-start float-left md:h-12 items-center md:px-4 gap-2">
 			<div class="flex items-center gap-4 text-sm text-muted-foreground">
@@ -184,21 +332,37 @@
 		</div>
 	</div>
 
-  <div class="inline-flex justify-end float-right h-12 items-center px-4 gap-2">
-    <div class="hidden sm:flex items-center text-sm text-muted-foreground">
+  <div class="inline-flex justify-end float-right h-12 items-center px-1 gap-1 sm:px-4 sm:gap-2">
+    <div class="flex items-center text-sm text-muted-foreground">
       {#if hasSelection}
-        <div class="flex items-center text-primary/90 gap-1 md:gap-2 border border-muted-foreground/20 px-2 py-1 rounded-full animate-in fade-in zoom-in duration-200">
-          <HugeiconsIcon
-            icon={CheckmarkBadge03Icon}
-            size={18}
-            color="currentColor"
-            strokeWidth={1.5}
-						class="md:w-4.5 w-4"
-          />
-          <span class="max-xs:text-[12px] text-xs">{count}&nbsp;&nbsp;Selected</span>
+        <div class="flex flex-row items-center max-sm:w-fit max-h-[80%] text-primary/90 sm:gap-2 border border-muted-foreground/20 sm:px-2 py-1
+					rounded-full px-1 pl-2 animate-in fade-in zoom-in duration-200"
+				>
+					<span>
+						<HugeiconsIcon
+							icon={CheckmarkBadge03Icon}
+							size={18}
+							color="currentColor"
+							strokeWidth={1.5}
+							class="md:w-4.5 w-4 max-sm:hidden"
+						/>
+					</span>
+					<span class="flex flex-col">
+						<span
+							class="text-[12px] sm:text-xs max-sm:pl-1"
+						>
+							{count}&nbsp;&nbsp;Selected
+						</span>
+						{#if $selectedTotalBytes > 0}
+							{const totalLength = formatBytes(String($selectedTotalBytes))}
+							<span class="opacity-75 font-normal text-[12px] sm:text-xs">
+								({totalLength})
+							</span>
+						{/if}
+					</span>
           <button
             onclick={clearSelection}
-            class="md:ml-1 hover:bg-muted-foreground/20 rounded-xl p-0.5 cursor-pointer"
+            class="md:ml-1 hover:bg-muted-foreground/20 rounded-full p-0.5 cursor-pointer"
             title="Clear selection"
           >
             <HugeiconsIcon
@@ -209,13 +373,14 @@
             />
           </button>
         </div>
-        <div class="w-px h-6 mx-2 bg-border"></div>
+        <div class="w-px h-6 mx-2 bg-border max-sm:hidden"></div>
       {/if}
     </div>
+
     <Button
       onclick={handleSearch}
       disabled={!isAria2Alive}
-      class="cursor-pointer! disabled:cursor-not-allowed!"
+      class="cursor-pointer! disabled:cursor-not-allowed! max-sm:hidden"
       size="icon"
       variant="ghost"
       title="Search"
@@ -226,27 +391,184 @@
         strokeWidth={2}
       />
     </Button>
+
     <Button
-      onclick={handleSort}
+      onclick={handleSearch}
       disabled={!isAria2Alive}
-      class="cursor-pointer! disabled:cursor-not-allowed!"
+      class={`cursor-pointer! disabled:cursor-not-allowed! sm:hidden ${hasSelection ? "hidden" : ""}`}
       size="icon"
       variant="ghost"
-      title="Sort"
+      title="Search"
+    >
+      <HugeiconsIcon
+        icon={Search02Icon}
+        class="text-muted-foreground w-4! h-4!"
+        strokeWidth={2}
+      />
+    </Button>
+
+		<!-- For desktop -->
+		<Button
+			onclick={handleSelectAll}
+			disabled={!isAria2Alive}
+			class="cursor-pointer! disabled:cursor-not-allowed! max-sm:hidden"
+			size="icon"
+			variant={hasSelection ? "secondary" : "ghost"}
+			title={hasSelection ? "Deselect all" : "Select all (Ctrl+A)"}
+		>
+			<HugeiconsIcon
+				icon={Select02Icon}
+				class={hasSelection ? "text-primary w-4! h-4!" : "text-muted-foreground w-4! h-4!"}
+				strokeWidth={2}
+			/>
+		</Button>
+
+		<!-- For mobile -->
+		<Button
+			onclick={handleSelectAll}
+			disabled={!isAria2Alive}
+			class={`cursor-pointer! disabled:cursor-not-allowed! sm:hidden ${hasSelection ? "hidden" : ""}`}
+			size="icon"
+			variant={hasSelection ? "secondary" : "ghost"}
+			title={hasSelection ? "Deselect all" : "Select all (Ctrl+A)"}
+		>
+			<HugeiconsIcon
+				icon={Select02Icon}
+				class={hasSelection ? "text-primary w-4! h-4!" : "text-muted-foreground w-4! h-4!"}
+				strokeWidth={2}
+			/>
+		</Button>
+
+		<!-- For desktop -->
+		<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <div
+			title="Sort by"
+			onclick={() => (sortMenuOpen = !sortMenuOpen)}
+			bind:this={sortMenuRef}
+      class="cursor-pointer! p-2 max-sm:hidden rounded-full disabled:cursor-not-allowed! relative hover:bg-muted hover:text-foreground dark:hover:bg-muted/50 aria-expanded:bg-muted aria-expanded:text-foreground"
     >
       <HugeiconsIcon
         icon={Sorting05Icon}
         class="text-muted-foreground w-4! h-4!"
         strokeWidth={2}
       />
-    </Button>
+			{#if sortMenuOpen}
+				<div
+					class="py-2 gap-x-2 px-2 top-10 text-foreground/95 text-[14px] z-10 inline-flex flex-row justify-center absolute rounded-xl border border-sidebar-border/80 bg-background/95 dark:bg-background/90
+						supports-backdrop-filter:bg-background/90 dark:supports-backdrop-filter:bg-background/90 backdrop-blur-3xl"
+					style="left: 50%; transform: translate(-50%, 0%);  width: 150px;"
+				>
+					<div class="w-[75%] gap-2 flex flex-col">
+						{#each sortOptions as option (option)}
+							<button
+								type="button"
+								onclick={() => selectSort(option.key)}
+								class={[
+									"flex h-full p-1.5 w-full cursor-pointer flex-row gap-2 items-center rounded-xl transition-colors",
+									tempSortBy === option.key ? "highlight-field" : ""
+								].join(" ")}
+							>
+								<HugeiconsIcon
+									icon={option.key === "time" ? Time04Icon : option.key === "name" ? AlphaIcon : FloppyDiskIcon}
+									class="text-foreground/95 w-4! h-4!"
+									strokeWidth={2}
+								/>
+								<span>{option.label}</span>
+							</button>
+						{/each}
+					</div>
+					<div
+						class="h-[inherit]! w-[25%] px-1 flex items-center highlight-field rounded-xl"
+						title="Toggle ascending or descending"
+					>
+						<button
+							title={tempOrder === "asc" ? "Descending" : "Ascending"}
+							onclick={toggleOrder}
+							aria-label={tempOrder === "asc" ? "Switch to descending" : "Switch to ascending"}
+							class={["w-full h-full flex items-center justify-center cursor-pointer rounded-lg transition-all",].join(" ")}
+						>
+							<img
+								aria-hidden="true"
+								src={getVisibleOrderAsset()}
+								alt={tempOrder === "asc" ? "switch to descending" : "switch to ascending"}
+								class="w-full h-[100%] sm:w-7 xs:w-6 shrink-0 object-contain"
+							/>
+						</button>
+					</div>
+				</div>
+			{/if}
+    </div>
+
+		<!-- For mobile -->
+		<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <div
+			title="Sort by"
+			onclick={() => (sortMenuOpen = !sortMenuOpen)}
+			bind:this={sortMenuRef}
+      class={`cursor-pointer! p-2 sm:hidden rounded-full disabled:cursor-not-allowed! relative hover:bg-muted hover:text-foreground
+				dark:hover:bg-muted/50 aria-expanded:bg-muted aria-expanded:text-foreground ${hasSelection ? "hidden" : ""}`}
+    >
+      <HugeiconsIcon
+        icon={Sorting05Icon}
+        class="text-muted-foreground w-4! h-4!"
+        strokeWidth={2}
+      />
+			{#if sortMenuOpen}
+				<div
+					class="py-2 gap-x-2 px-2 top-10 text-foreground/95 text-[14px] z-10 inline-flex flex-row justify-center absolute rounded-xl border border-sidebar-border/80 bg-background/95 dark:bg-background/90
+						supports-backdrop-filter:bg-background/90 dark:supports-backdrop-filter:bg-background/90 backdrop-blur-3xl"
+					style="left: 50%; transform: translate(-50%, 0%);  width: 150px;"
+				>
+					<div class="w-[75%] gap-2 flex flex-col">
+						{#each sortOptions as option (option)}
+							<button
+								type="button"
+								onclick={() => selectSort(option.key)}
+								class={[
+									"flex h-full p-1.5 w-full cursor-pointer flex-row gap-2 items-center rounded-xl transition-colors",
+									tempSortBy === option.key ? "highlight-field" : ""
+								].join(" ")}
+							>
+								<HugeiconsIcon
+									icon={option.key === "time" ? Time04Icon : option.key === "name" ? AlphaIcon : FloppyDiskIcon}
+									class="text-foreground/95 w-4! h-4!"
+									strokeWidth={2}
+								/>
+								<span>{option.label}</span>
+							</button>
+						{/each}
+					</div>
+					<div
+						class="h-[inherit]! w-[25%] px-1 flex items-center highlight-field rounded-xl"
+						title="Toggle ascending or descending"
+					>
+						<button
+							title={tempOrder === "asc" ? "Descending" : "Ascending"}
+							onclick={toggleOrder}
+							aria-label={tempOrder === "asc" ? "Switch to descending" : "Switch to ascending"}
+							class={["w-full h-full flex items-center justify-center cursor-pointer rounded-lg transition-all",].join(" ")}
+						>
+							<img
+								aria-hidden="true"
+								src={getVisibleOrderAsset()}
+								alt={tempOrder === "asc" ? "switch to descending" : "switch to ascending"}
+								class="w-full h-[100%] sm:w-7 xs:w-6 shrink-0 object-contain"
+							/>
+						</button>
+					</div>
+				</div>
+			{/if}
+    </div>
+
 		<!-- vertical seperator -->
-    <div class="w-px h-6 mx-2 bg-border"></div>
+    <div class="w-px h-6 bg-border"></div>
+
+		<!-- For desktop -->
     <Button
 			disabled={!isAria2Alive}
       onclick={handleAdd}
-      class="cursor-pointer disabled:cursor-not-allowed!"
-      size="icon"
+      class="cursor-pointer disabled:cursor-not-allowed! max-sm:hidden"
+			size="icon-sm"
       variant="ghost"
       title="Add downloads"
     >
@@ -256,14 +578,32 @@
         strokeWidth={2}
       />
     </Button>
-    <AddDl
-      bind:open={addDialogOpen}
-      onclose={() => addDialogOpen = false}
-    />
+
+		<!-- For mobile -->
+    <Button
+			disabled={!isAria2Alive}
+      onclick={handleAdd}
+      class={`cursor-pointer disabled:cursor-not-allowed! sm:hidden ${hasSelection ? "hidden" : "flex"}`}
+			size="icon-sm"
+      variant="ghost"
+      title="Add downloads"
+    >
+      <HugeiconsIcon
+        icon={PlusSignIcon}
+        class="text-muted-foreground w-4! h-4!"
+        strokeWidth={2}
+      />
+    </Button>
+
+    <AddDl bind:open={addDialogOpen} onclose={() => addDialogOpen = false} />
 		<SearchDialog bind:open={searchDialogOpen} />
-		<div class="w-px h-6 mx-2 bg-border hidden md:block"></div>
-		<!-- md screen action buttons -->
-    <div class="items-center gap-1 hidden md:flex">
+
+		<div class="w-px h-6 bg-border max-sm:hidden"></div>
+
+		<!-- For mobile devices -->
+		<div
+			class={`items-center sm:hidden ${hasSelection ? "flex" : "hidden"}`}
+		>
       <Button
         variant="ghost"
         size="icon"
@@ -327,26 +667,172 @@
           class="w-4! h-4!"
         />
       </Button>
+		</div>
 
-			<div class="w-px h-6 mx-2 bg-border"></div>
-			<Button
-				class="cursor-pointer! disabled:cursor-not-allowed!"
-				size="icon"
-				variant="ghost"
+		<!-- Desktop screen action buttons -->
+    <div class="items-center gap-1 hidden sm:flex">
+      <Button
+        variant="ghost"
+        size="icon"
+				class="disabled:cursor-not-allowed! cursor-pointer"
+        disabled={!hasSelection || !isAria2Alive || !canResume}
+        onclick={handleResume}
+        title="Resume selected"
+      >
+        <HugeiconsIcon
+          icon={PlayIcon}
+          class="text-muted-foreground w-4! h-4!"
+          strokeWidth={2}
+          size={24}
+        />
+      </Button>
+
+      <Button
+        variant="ghost"
+        size="icon"
+        disabled={!hasSelection || !isAria2Alive || !canPause}
+        class="disabled:cursor-not-allowed! cursor-pointer"
+        onclick={handlePause}
+        title="Pause selected"
+      >
+        <HugeiconsIcon
+          icon={PauseIcon}
+          class="text-muted-foreground w-4! h-4!"
+          strokeWidth={2}
+          size={24}
+        />
+      </Button>
+
+      <Button
+        variant="ghost"
+        size="icon"
+        disabled={!hasSelection || !isAria2Alive || !canStop}
+        class="text-muted-foreground cursor-pointer! disabled:cursor-not-allowed!"
+        onclick={handleStop}
+        title="Stop from downloading"
+      >
+        <HugeiconsIcon
+          icon={ListXIcon}
+          class="w-4! h-4!"
+          strokeWidth={2}
+          size={24}
+        />
+      </Button>
+
+      <Button
+        size="icon"
+        variant="ghost"
+        class="text-muted-foreground hover:text-destructive! cursor-pointer! disabled:cursor-not-allowed! hover:bg-destructive/10!"
+        disabled={!hasSelection || !isAria2Alive}
+        onclick={promptDelete}
+        title="Delete selected"
+      >
+        <HugeiconsIcon
+          size={24}
+          strokeWidth={2}
+          icon={Delete02Icon}
+          class="w-4! h-4!"
+        />
+      </Button>
+    </div>
+
+		<!-- seperator -->
+		<div class="w-px h-6 bg-border"></div>
+		<DropdownMenu.Root>
+			<DropdownMenu.Trigger
 				title="More"
+				class="cursor-pointer disabled:cursor-not-allowed! rounded-full hover:bg-muted-foreground/10"
+				disabled={!isAria2Alive}
 			>
-			<!-- need: -->
-			<!-- pauseAll -->
-			<!-- resumeAll -->
-			<!-- StopAll -->
-			<!-- purgeDownloadResult -> removes completed/error/removed -->
 				<HugeiconsIcon
 					icon={Menu04Icon}
 					class="text-muted-foreground w-4! h-4!"
 					strokeWidth={2}
 				/>
-			</Button>
-    </div>
+				<span class="sr-only">Open menu</span>
+			</DropdownMenu.Trigger>
+			<DropdownMenu.Content align="end" class="sm:p-2 cursor-pointer text-xs sm:text-sm">
+				<DropdownMenu.Item
+					title="Force pause all active, waiting downloads"
+					class="flex hover:rounded-xl items-center px-2 py-1.5 gap-x-1 rounded-md
+						pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
+					onclick={async () => {
+						await aria2.pauseAll();
+					}}
+				>
+					<HugeiconsIcon
+						icon={PauseIcon}
+						class="w-4! h-4!"
+						strokeWidth={2}
+					/>
+					Pause all
+				</DropdownMenu.Item>
+				<DropdownMenu.Separator />
+				<DropdownMenu.Item
+					title="Resume all paused downloads"
+					class="flex hover:rounded-xl items-center px-2 py-1.5 gap-x-1 rounded-md
+						pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
+					onclick={async () => {
+						await aria2.resumeAll();
+					}}
+				>
+					<HugeiconsIcon
+						icon={PlayIcon}
+						class="w-4! h-4!"
+						strokeWidth={2}
+					/>
+					Resume all
+				</DropdownMenu.Item>
+				<DropdownMenu.Separator />
+				<DropdownMenu.Item
+					title="Retry all error, stopped downloads"
+					class="flex hover:rounded-xl items-center px-2 py-1.5 gap-x-1 rounded-md
+						pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
+					onclick={async () => {
+						await aria2.retryAll();
+					}}
+				>
+					<HugeiconsIcon
+						icon={CircleArrowReload02Icon}
+						class="w-4! h-4!"
+						strokeWidth={2}
+					/>
+					Retry all
+				</DropdownMenu.Item>
+				<DropdownMenu.Separator />
+				<DropdownMenu.Item
+					title="Stop all downloads"
+					class="flex hover:rounded-xl items-center px-2 py-1.5 gap-x-1 rounded-md
+						pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
+					onclick={async () => {
+						await aria2.stopAll();
+					}}
+				>
+					<HugeiconsIcon
+						icon={ListXIcon}
+						class="w-4! h-4!"
+						strokeWidth={2}
+					/>
+					Stop all
+				</DropdownMenu.Item>
+				<DropdownMenu.Separator />
+				<DropdownMenu.Item
+					title="Purge all completed, error, removed downloads"
+					class="flex hover:rounded-xl items-center px-2 py-1.5 gap-x-1 rounded-md
+						pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
+					onclick={async () => {
+						await aria2.purgeAll();
+					}}
+				>
+					<HugeiconsIcon
+						icon={CancelSquareIcon}
+						class="w-4! h-4!"
+						strokeWidth={2}
+					/>
+					Purge all
+				</DropdownMenu.Item>
+			</DropdownMenu.Content>
+		</DropdownMenu.Root>
   </div>
 </div>
 
@@ -459,7 +945,6 @@
 	</Dialog.Content>
 </Dialog.Root>
 
-
 <style>
   .json-class {
     font-family: monospace;
@@ -474,3 +959,4 @@
 		--jsonValNumberColor: var(--color-muted-foreground);
   }
 </style>
+

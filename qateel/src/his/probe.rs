@@ -2,6 +2,7 @@ use std::path::Path;
 use reqwest::Client;
 use std::sync::OnceLock;
 use std::process::Stdio;
+use std::net::ToSocketAddrs;
 use futures::stream::StreamExt;
 use std::collections::HashMap;
 use reqwest::header::{
@@ -108,12 +109,14 @@ pub async fn is_internet_connected() -> bool {
         }
     }
 
-    // Perform the check with a fast timeout
-    let ok = http_client().get("http://clients3.google.com/generate_204")
-        .timeout(Duration::from_secs(3))								// Fail fast
-        .send().await
-        .map(|res| res.status() == 204)
-        .unwrap_or(false);
+    let ok = tokio::task::spawn_blocking(|| {
+        ("google.com", 80)
+            .to_socket_addrs()
+            .map(|mut iter| iter.next().is_some())
+            .unwrap_or(false)
+    })
+    .await
+    .unwrap_or(false);
 
     // Update the cache
     state.status = ok;

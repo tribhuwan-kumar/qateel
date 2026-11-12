@@ -76,7 +76,7 @@
         {error}
       </div>
     {:else}
-			<div class="json-class h-[65vh] md:h-[70vh] overflow-x-scroll overflow-y-scroll z-100">
+			<div class="json-class text-xs sm:text-sm h-[65vh] md:h-[70vh] overflow-x-scroll overflow-y-scroll z-100">
 				<JsonView
 					json={info}
 				/>
@@ -88,7 +88,6 @@
 <style>
   .json-class {
     font-family: monospace;
-    font-size: 14px;
     --jsonBorderLeft: 1px solid var(--color-muted-foreground);
     --jsonValColor: var(--color-muted-foreground);
 		--jsonBracketColor: var(--bg-muted);

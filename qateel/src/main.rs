@@ -3,6 +3,7 @@ use cli::Args;
 use clap::Parser;
 use std::sync::Arc;
 use config::AppConf;
+use dashmap::DashMap;
 use tokio::sync::watch;
 use std::time::Duration;
 use std::net::SocketAddr;
@@ -19,6 +20,7 @@ mod his;
 mod key;
 mod auth;
 mod logs;
+mod user;
 mod cron;
 mod aria2;
 mod utils;
@@ -40,7 +42,7 @@ use crate::{
 	aria2::types::GlobalStatWsMessage,
 };
 
-const CHANNEL: usize = 1024;
+const ARIA2_RES_CHANNEL: usize = 1024;
 const SHUTDOWN_CHANNEL: usize = 1;
 
 #[tokio::main]
@@ -63,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	utils::ensure_aria2_installation();
 
     let (shutdown_tx, _) = broadcast::channel(SHUTDOWN_CHANNEL);
-    let (aria2_resp_tx, _aria2_resp_rx) = broadcast::channel(CHANNEL);
+    let (aria2_resp_tx, _aria2_resp_rx) = broadcast::channel(ARIA2_RES_CHANNEL);
 
     let (history_tx_rw, _history_rx_rw) = watch::channel(DlWsMessage::default());
     let (global_tx_rw, _global_rx_rw) = watch::channel(GlobalStatWsMessage::default());
@@ -118,8 +120,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		active_tasks: actv_tasks,
 		progress_buf: progress_updater,
         aria2: Arc::new(aria2_client),
-        history_tx: Arc::new(history_tx_rw),
-        global_tx: Arc::new(global_tx_rw),
+        // history_tx: Arc::new(history_tx_rw),
+        // global_tx: Arc::new(global_tx_rw),
+		user_hubs: Arc::new(DashMap::new()),
     };
 
     info!("Starting history service");

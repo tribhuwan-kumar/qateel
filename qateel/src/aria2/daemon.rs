@@ -16,6 +16,17 @@ pub struct Aria2Daemon {
 	child_process: Arc<Mutex<Option<Child>>>,
 }
 
+pub const RESTRICTED_ARIA2_KEYS: &[&str] = &[
+    "dir",
+    "daemon",
+    "rpc-user",
+    "rpc-passwd",
+    "rpc-secret",
+    "enable-rpc",
+    "rpc-listen-port",
+    "rpc-save-upload-metadata",
+];
+
 // TODO: Implement self healing aria2 daemon
 impl Aria2Daemon {
     pub fn new() -> Self {
@@ -54,21 +65,10 @@ impl Aria2Daemon {
 			cmd.arg(format!("--rpc-passwd={}", config.aria2_rpc_passwd));
 		}
 
-        // Restricted keys that is not allowed to override via api
-        let restricted = [
-			"dir",
-			"enable-rpc",
-			"rpc-listen-port",
-			"rpc-secret",
-			"daemon",
-			"rpc-save-upload-metadata",
-			"rpc-passwd",
-			"rpc-user",
-		];
-
         debug!("Aria2 arguments: {:?}", args);
         for (key, value) in args {
-            if restricted.contains(&key.as_str()) {
+			// Restricted keys that is not allowed to override via api
+            if RESTRICTED_ARIA2_KEYS.contains(&key.as_str()) {
                 continue;
             }
 

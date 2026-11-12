@@ -1,6 +1,7 @@
 use rand::Rng;
-use std::path::PathBuf;
+use std::fmt::Display;
 use tracing::{info, error};
+use std::path::{Path, PathBuf};
 use std::process::{Command, exit};
 
 /// Print intro
@@ -42,6 +43,12 @@ pub fn default_data_dir() -> PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from(".qateel"))
         .join("qateel")
+}
+
+/// Torrent stored torrents file path
+pub fn get_torrent_path<T: Display>(data_dir: &Path, user_id: T, info_hash: &str) -> PathBuf {
+    let file_name = format!("{}-{}.torrent", user_id, info_hash);
+    data_dir.join("torrents").join(file_name)
 }
 
 /// Default aria2 downlaod dir

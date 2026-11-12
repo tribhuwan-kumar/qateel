@@ -1,6 +1,7 @@
 use axum::{
     response::IntoResponse,
-    extract::{State,
+    extract::{
+        State,
         ws::{
             Message,
             WebSocket,
@@ -8,10 +9,9 @@ use axum::{
         },
     },
 };
-
+use futures::SinkExt;
 use crate::{
     app::AppState,
-    aria2::types::GlobalStatWsMessage,
     auth::types::User as AuthenticatedUser,
 };
 
@@ -27,28 +27,38 @@ pub async fn global_stat_ws(
 async fn global_stat(
     mut socket: WebSocket,
     state: AppState,
-    user: AuthenticatedUser
+    user: AuthenticatedUser,
 ) {
-    let mut rx = state.global_tx.subscribe();
+    // Get or create the hub scoped strictly to this user
+    let hub = state.subscribe_user(&user.user_id);
+    let mut rx = hub.global_tx.subscribe();
+    let mut shutdown_rx = state.shutdown_tx.subscribe();
+
     loop {
-        if rx.changed().await.is_err() {
-            break;
-        }
+        tokio::select! {
+            biased;
 
-        let msg = rx.borrow_and_update().clone();
+            _ = shutdown_rx.recv() => {
+                let _ = socket.close().await;
+                break;
+            }
 
-        match &msg {
-            GlobalStatWsMessage::Global { user_id, .. } => {
-                if *user_id == user.user_id {
-                    let text = serde_json::to_string(&msg).unwrap_or_default();
-                    if socket.send(
-                        Message::Text(text.into())
-                    ).await.is_err() {
-						break;
-					}
+            // Utf8Bytes directly for this user
+            res = rx.changed() => {
+                if res.is_err() {
+                    break;
                 }
-            },
+
+                // Zero-copy pointer clone
+                let payload = rx.borrow_and_update().clone();
+                if !payload.is_empty() && socket.send(Message::Text(payload)).await.is_err() {
+                    break;
+                }
+            }
         }
     }
+
+    // Remove if this user has no other active WebSockets
+    state.cleanup_user(&user.user_id, &hub);
 }
 

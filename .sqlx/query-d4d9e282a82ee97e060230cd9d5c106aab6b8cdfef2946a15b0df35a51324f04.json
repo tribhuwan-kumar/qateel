@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "\n\t\t\t\tUPDATE download_history\n\t\t\t\tSET\n\t\t\t\t\tname = CASE WHEN $1 IS NOT NULL THEN $1 ELSE name END,\n\t\t\t\t\tstatus = $2,\n\t\t\t\t\tdir = COALESCE(NULLIF($3, ''), dir),\n\t\t\t\t\tfiles = COALESCE(NULLIF($4, '[]'), files),\n\t\t\t\t\ttotal_length = COALESCE(NULLIF($5, '0'), total_length),\n\t\t\t\t\tcompleted_length = COALESCE(NULLIF($6, '0'), completed_length),\n\t\t\t\t\tupload_length = COALESCE(NULLIF($7, '0'), upload_length),\n\t\t\t\t\tsource_uri = COALESCE(NULLIF($8, ''), source_uri),\n\t\t\t\t\tinfo_hash = COALESCE(NULLIF($9, ''), info_hash),\n\t\t\t\t\tcontent_hash = COALESCE(NULLIF($10, ''), content_hash),\n\t\t\t\t\tnum_pieces = COALESCE(NULLIF($11, '0'), num_pieces),\n\t\t\t\t\tpiece_length = COALESCE(NULLIF($12, '0'), piece_length),\n\t\t\t\t\tis_resume_supported = CASE WHEN is_resume_supported = 'true' THEN 'true' ELSE COALESCE($13, is_resume_supported) END,\n\t\t\t\t\tverified_length = COALESCE(NULLIF($14, '0'), verified_length),\n\t\t\t\t\ttorrent = COALESCE($15, torrent),\n\t\t\t\t\toptions = COALESCE($16, options),\n\t\t\t\t\tseeder = $17,\n\t\t\t\t\terror_code = $18,\n\t\t\t\t\terror_message = $19,\n\t\t\t\t\tverify_integrity_pending = $20,\n\t\t\t\t\tcompleted_at = CASE\n\t\t\t\t\t\tWHEN $2 = 'complete' OR\n\t\t\t\t\t\t\t $2 = 'seeding'\n\t\t\t\t\t\t\t THEN COALESCE(completed_at, CURRENT_TIMESTAMP)\n\t\t\t\t\t\tELSE NULL\n\t\t\t\t\tEND,\n\t\t\t\t\tupdated_at = CURRENT_TIMESTAMP\n\t\t\t\tWHERE gid = $21\n\t\t\t\tRETURNING\n\t\t\t\t\tuser_id,\n\t\t\t\t\tname,\n\t\t\t\t\tsource_uri,\n\t\t\t\t\tcreated_at,\n\t\t\t\t\tcompleted_at,\n\t\t\t\t\tkind as \"kind: Kind\",\n\t\t\t\t\tcategory as \"category: Category\"\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "user_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "source_uri",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 3,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "completed_at",
+        "ordinal": 4,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "kind: Kind",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "category: Category",
+        "ordinal": 6,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 21
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "d4d9e282a82ee97e060230cd9d5c106aab6b8cdfef2946a15b0df35a51324f04"
+}

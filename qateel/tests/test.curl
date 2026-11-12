@@ -343,7 +343,7 @@ curl -b cookie "http://10.63.128.102:9050/api/qateel/user/history?page=1&limit=2
 # create a user
 curl -c cookie -H
     'Content-Type: application/json' -d '{
-    "username": "hero",
+    "username": "herohero",
     "password": "helphelp",
     "requesterUsername": "admin"
     }'

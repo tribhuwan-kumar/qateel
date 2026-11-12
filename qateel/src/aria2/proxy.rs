@@ -15,8 +15,6 @@ use tokio::time::{sleep, Duration};
 use futures::stream::{self, StreamExt};
 use super::types::{
     Kind,
-	Order,
-	SortBy,
     GidReq,
     MoveReq,
     StopReq,
@@ -62,6 +60,7 @@ use crate::{
 	his::extract::Extraction,
     his::service::HistoryService,
     auth::types::User as AuthenticatedUser,
+	aria2::daemon::RESTRICTED_ARIA2_KEYS,
 };
 
 pub const MAX_MULTICALL_BATCH: usize = 20;
@@ -74,7 +73,6 @@ pub async fn add_uris(
     user: AuthenticatedUser,
     Json(payload): Json<AddUriReq>,
 ) -> impl IntoResponse {
-
     let mut results: Vec<Value> = Vec::new();
 	let mut queued_calls: Vec<(PendingAddUri, Value)> = Vec::new();
 
@@ -110,7 +108,7 @@ pub async fn add_uris(
 
 		let category = Category::determine(Some(task.name.as_str()), &kind.as_str());
 
-        // Store the values we'll need for the DB insertion later
+        // Store the values we'll need for the db insertion later
         let pending = PendingAddUri {
             index: i,
             kind: kind.clone(),
@@ -122,28 +120,27 @@ pub async fn add_uris(
         };
 
         if is_magnet {
-            let hash_str = info_hash.clone().unwrap();
-            let file_name = format!("{}-{}.torrent", user.user_id, hash_str);
-            let torrent_dir = state.config.data_dir.join("torrents");
-            let torrent_path = torrent_dir.join(&file_name);
+			if let Some(hash_str) = info_hash.as_deref() {
+				let torrent_path = utils::get_torrent_path(&state.config.data_dir, user.user_id.clone(), &hash_str);
+				// Directly inject the .torrent file downloaded during `probe_uris_info`
+				if torrent_path.exists() {
+					if let Ok(file_contents) = tokio::fs::read(&torrent_path).await {
+						let b64 = STANDARD.encode(&file_contents);
+						queued_calls.push((
+							pending,
+							serde_json::json!({
+								"methodName": "aria2.addTorrent",
+								"params": [
+									b64,
+									[],                                /* Webseeding URIs, keeping it empty till now */
+									opt
+								]
+							})));
 
-            // Directly inject the .torrent file downloaded during `probe_uris_info`
-            if torrent_path.exists() {
-                if let Ok(file_contents) = tokio::fs::read(&torrent_path).await {
-                    let b64 = STANDARD.encode(&file_contents);
-                    queued_calls.push((
-						pending,
-						serde_json::json!({
-							"methodName": "aria2.addTorrent",
-							"params": [
-								b64,
-								[],                                /* Webseeding URIs, keeping it empty till now */
-								opt
-							]
-						})));
-                    continue;
-                }
-            }
+						continue;
+					}
+				}
+			}
         }
 
         queued_calls.push((
@@ -893,15 +890,14 @@ pub async fn pause(
     Json(payload): Json<PauseReq>,
 ) -> impl IntoResponse {
     // Validate gids for the batch multicall
-    let gids = match &payload.gids {
-        Some(gids) if !gids.is_empty() => gids,
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "No GID provided to pause." })),
-            ).into_response();
-        }
-    };
+	let gids = payload.gids;
+
+	if gids.is_empty(){
+		return (
+			StatusCode::BAD_REQUEST,
+			Json(json!({ "error": "No GID provided to pause." })),
+		).into_response();
+	}
 
     let method = if payload.force_pause.unwrap_or(false) {
         "aria2.forcePause"
@@ -1217,15 +1213,13 @@ pub async fn resume(
     Json(payload): Json<ResumeReq>,
 ) -> impl IntoResponse {
     // Validate GIDs for the batch multicall
-    let gids = match &payload.gids {
-        Some(gids) if !gids.is_empty() => gids,
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "No GID provided to resume." })),
-            ).into_response();
-        }
-    };
+	let gids = payload.gids;
+	if gids.is_empty(){
+		return (
+			StatusCode::BAD_REQUEST,
+			Json(json!({ "error": "No GID provided to resume." })),
+		).into_response();
+	}
 
     let method = "aria2.unpause";
     let mut succeeded = Vec::new();
@@ -1515,15 +1509,14 @@ pub async fn stop(
     _user: AuthenticatedUser,
     Json(payload): Json<StopReq>,
 ) -> impl IntoResponse {
-    let gids = match &payload.gids {
-        Some(gids) if !gids.is_empty() => gids,
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "No GID provided to resume." })),
-            ).into_response();
-        }
-    };
+	let gids = payload.gids;
+
+	if gids.is_empty(){
+		return (
+			StatusCode::BAD_REQUEST,
+			Json(json!({ "error": "No GID provided to stop." })),
+		).into_response();
+	}
 
     let method = if payload.force_stop.unwrap_or(false) {
         "aria2.forceRemove"
@@ -1777,12 +1770,19 @@ pub async fn stop_all(
                             .get("message")
                             .and_then(|v| v.as_str())
                             .unwrap_or("Unknown error");
-
-                        failed.push(json!({
-                            "gid": expected_gid,
-                            "code": code,
-                            "error": msg
-                        }));
+						/*
+							if the aria2 error is something like this means this `GID e6147513de73a4a5 is not found`
+							this gid doesn't found in aria2 so it should count as success cause its already has been removed
+						*/
+						if msg.to_lowercase().contains("is not found") {
+							successful_gids.push(expected_gid.clone());
+						} else {
+							failed.push(json!({
+								"gid": expected_gid,
+								"code": code,
+								"error": msg
+							}));
+						}
                     } else {
                         failed.push(json!({
                             "gid": expected_gid,
@@ -1979,133 +1979,132 @@ pub async fn details(
     }
 }
 
-/// Retry a failed download on status `stopped`, `removed`, `error`
-/// If server `is_resume_supported`, resume the download
-/// If not download again with
-/// `allow-overwrite` & `continue=false` for uri
+/// Retry a failed download on status `stopped`, `error`
+/// If server `is_resume_supported`, download again `allow-overwrite=false` and `continue=true` with the download
+/// If not download again with `allow-overwrite` & `continue=false` for uri
 /// `check-integrity=true` for torrents and magnets
 pub async fn retry(
     State(state): State<AppState>,
     _user: AuthenticatedUser,
     Json(payload): Json<RetryReq>,
 ) -> impl IntoResponse {
-    let gid = payload.gid.clone();
-
-    let record = sqlx::query!(
-        r#"
-			SELECT
-				dir,
-				files,
-				options,
-				info_hash,
-				source_uri,
-				total_length,
-				is_resume_supported,
-				kind as "kind: Kind",
-				status as "status: GidStatus",
-				torrent as "torrent: sqlx::types::Json<TorrentMagnetMeta>"
-			FROM download_history
-			WHERE gid = ?
-        "#,
-        gid
-    )
-    .fetch_optional(&state.db)
-    .await
-    .unwrap_or(None);
-
-    let rec = match record {
-        Some(r) => r,
-        None => {
-            return (StatusCode::NOT_FOUND,
-                Json(json!({ "error": format!("GID {} not found", gid) })))
-                .into_response();
-        }
-    };
-
-    if rec.status != GidStatus::Error
-		|| rec.status != GidStatus::Stopped
-		|| rec.status != GidStatus::Stopped {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({
-                "error": "Only GID with 'stopped', 'removed' and 'error' status can be retried",
-            })),
-        ).into_response();
-    }
-
-    let resource_to_add = if let Some(uri) = rec.source_uri.clone() {
-        uri
-    } else if let Some(hash) = rec.info_hash.as_deref() {
-        format!("magnet:?xt=urn:btih:{}", hash)
-    } else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "Can't retry, no source URI or info hash available" })),
-        ).into_response();
-    };
-
-    let is_torrent = matches!(rec.kind, Kind::Torrent)
-        || rec.torrent.is_some()
-        || rec.info_hash.is_some();
-
-	// Bools are text in db
-	let should_resume = rec
-		.is_resume_supported
-		.as_ref()
-		.map(|s| s.eq_ignore_ascii_case("true"))
-		.unwrap_or(false);
-
-	// clear from aria2 memory
-    if !should_resume {
-        let _ = state.aria2.call("aria2.forceRemove", vec![json!(gid.clone())]).await;
-        let _ = state.aria2.call("aria2.removeDownloadResult", vec![json!(gid.clone())]) .await;
-    }
-
-    let mut options = serde_json::Map::new();
-
-    if let Some(dir) = rec.dir.clone() {
-        options.insert("dir".to_string(), json!(dir));
-    }
-
-    if should_resume {
-        options.insert("continue".to_string(), json!(true));
-        if is_torrent {
-            options.insert("check-integrity".to_string(), json!(true));
-        }
-    } else {
-        options.insert("allow-overwrite".to_string(), json!(true));
-        options.insert("continue".to_string(), json!(false));
-        options.insert("check-integrity".to_string(), json!(false));
-    }
-
-    let params = vec![json!([resource_to_add]), json!(options)];
-
-    match state.aria2.call("aria2.addUri", params).await {
-        Ok(new_gid_val) => {
-            let new_gid = new_gid_val.as_str().unwrap_or_default();
-
-            let _ = sqlx::query!(
-                r#"
-					UPDATE download_history
-						SET gid = ?,
-							error_code = NULL,
-							error_message = NULL,
-							updated_at = CURRENT_TIMESTAMP
-					WHERE gid = ?
-                "#,
-                new_gid,
-                gid
-            )
-            .execute(&state.db)
-            .await;
-
-            (StatusCode::OK, Json(json!({ "newGid": new_gid }))) .into_response()
-        }
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({ "error": e })),
-        ).into_response(),
-    }
+ //    let gid = payload.gid.clone();
+	//
+ //    let record = sqlx::query!(
+ //        r#"
+	// 		SELECT
+	// 			dir,
+	// 			files,
+	// 			options,
+	// 			info_hash,
+	// 			source_uri,
+	// 			total_length,
+	// 			is_resume_supported,
+	// 			kind as "kind: Kind",
+	// 			status as "status: GidStatus",
+	// 			torrent as "torrent: sqlx::types::Json<TorrentMagnetMeta>"
+	// 		FROM download_history
+	// 		WHERE gid = ?
+ //        "#,
+ //        gid
+ //    )
+ //    .fetch_optional(&state.db)
+ //    .await
+ //    .unwrap_or(None);
+	//
+ //    let rec = match record {
+ //        Some(r) => r,
+ //        None => {
+ //            return (StatusCode::NOT_FOUND,
+ //                Json(json!({ "error": format!("GID {} not found", gid) })))
+ //                .into_response();
+ //        }
+ //    };
+	//
+ //    if rec.status != GidStatus::Error
+	// 	|| rec.status != GidStatus::Stopped
+	// 	|| rec.status != GidStatus::Stopped {
+ //        return (
+ //            StatusCode::CONFLICT,
+ //            Json(json!({
+ //                "error": "Only GID with 'stopped', 'removed' and 'error' status can be retried",
+ //            })),
+ //        ).into_response();
+ //    }
+	//
+ //    let resource_to_add = if let Some(uri) = rec.source_uri.clone() {
+ //        uri
+ //    } else if let Some(hash) = rec.info_hash.as_deref() {
+ //        format!("magnet:?xt=urn:btih:{}", hash)
+ //    } else {
+ //        return (
+ //            StatusCode::BAD_REQUEST,
+ //            Json(json!({ "error": "Can't retry, no source URI or info hash available" })),
+ //        ).into_response();
+ //    };
+	//
+ //    let is_torrent = matches!(rec.kind, Kind::Torrent)
+ //        || rec.torrent.is_some()
+ //        || rec.info_hash.is_some();
+	//
+	// // Bools are text in db
+	// let should_resume = rec
+	// 	.is_resume_supported
+	// 	.as_ref()
+	// 	.map(|s| s.eq_ignore_ascii_case("true"))
+	// 	.unwrap_or(false);
+	//
+	// // clear from aria2 memory
+ //    if !should_resume {
+ //        let _ = state.aria2.call("aria2.forceRemove", vec![json!(gid.clone())]).await;
+ //        let _ = state.aria2.call("aria2.removeDownloadResult", vec![json!(gid.clone())]) .await;
+ //    }
+	//
+ //    let mut options = serde_json::Map::new();
+	//
+ //    if let Some(dir) = rec.dir.clone() {
+ //        options.insert("dir".to_string(), json!(dir));
+ //    }
+	//
+ //    if should_resume {
+ //        options.insert("continue".to_string(), json!(true));
+ //        if is_torrent {
+ //            options.insert("check-integrity".to_string(), json!(true));
+ //        }
+ //    } else {
+ //        options.insert("allow-overwrite".to_string(), json!(true));
+ //        options.insert("continue".to_string(), json!(false));
+ //        options.insert("check-integrity".to_string(), json!(false));
+ //    }
+	//
+ //    let params = vec![json!([resource_to_add]), json!(options)];
+	//
+ //    match state.aria2.call("aria2.addUri", params).await {
+ //        Ok(new_gid_val) => {
+ //            let new_gid = new_gid_val.as_str().unwrap_or_default();
+	//
+ //            let _ = sqlx::query!(
+ //                r#"
+	// 				UPDATE download_history
+	// 					SET gid = ?,
+	// 						error_code = NULL,
+	// 						error_message = NULL,
+	// 						updated_at = CURRENT_TIMESTAMP
+	// 				WHERE gid = ?
+ //                "#,
+ //                new_gid,
+ //                gid
+ //            )
+ //            .execute(&state.db)
+ //            .await;
+	//
+ //            (StatusCode::OK, Json(json!({ "newGid": new_gid }))) .into_response()
+ //        }
+ //        Err(e) => (
+ //            StatusCode::BAD_GATEWAY,
+ //            Json(json!({ "error": e })),
+ //        ).into_response(),
+ //    }
 }
 
 /// Fetches the options snapshot from the local database instead of Aria2,
@@ -2148,25 +2147,6 @@ pub async fn get_option(
     };
 
     (StatusCode::OK, Json(serde_json::json!({ "data": options_json })))
-}
-
-/// Impl for setting options
-impl Aria2Options {
-    pub fn merge(&mut self, other: Aria2Options) {
-        self.0.extend(other.0);
-    }
-
-	pub fn to_string_map(&self) -> HashMap<String, String> {
-		self.0.iter().map(|(k, v)| {
-			let val_str = match v {
-				// Extract raw string without quotes
-				Value::String(s) => s.clone(),
-				// Safely stringify numbers, bools
-				_ => v.to_string(),
-			};
-			(k.clone(), val_str)
-		}).collect()
-	}
 }
 
 /// Ref: https://aria2.github.io/manual/en/html/aria2c.html#aria2.changeOption
@@ -2241,7 +2221,10 @@ pub async fn set_global_option(
     user: AuthenticatedUser,
     Json(payload): Json<SetGlobalOptionReq>,
 ) -> impl IntoResponse {
-    let params = vec![serde_json::json!(payload.options)];
+    let mut safe_options = payload.options;
+    safe_options.filter_restricted();
+
+    let params = vec![serde_json::json!(safe_options)];
 
     match state.aria2.call("aria2.changeGlobalOption", params).await {
         Ok(_) => {
@@ -2256,21 +2239,11 @@ pub async fn set_global_option(
             .map(|r| r.value)
             .unwrap_or_else(|| "{}".to_string());
 
-			let restricted = [
-				"dir",
-				"daemon",
-				"rpc-user",
-				"rpc-passwd",
-				"rpc-secret",
-				"enable-rpc",
-				"rpc-listen-port",
-				"rpc-save-upload-metadata",
-			];
-
             let mut current_opt: Aria2Options = serde_json::from_str(&existing)
-                .unwrap_or(Aria2Options(serde_json::Map::new()));
+                .unwrap_or_else(|_| Aria2Options(serde_json::Map::new()));
 
-            current_opt.merge(payload.options);
+            current_opt.merge(safe_options);
+
             let final_json = serde_json::to_string(&current_opt).unwrap();
 
             let _ = sqlx::query!(
@@ -2306,6 +2279,7 @@ pub async fn set_global_option(
 }
 
 /// Those options that can't be set via aria2 rpc
+/// FIX: need restore the active, waiting, paused,
 pub async fn set_cmd_option(
     State(state): State<AppState>,
     user: AuthenticatedUser,
@@ -2326,7 +2300,21 @@ pub async fn set_cmd_option(
 		.unwrap_or_default();
 
     // `Aria2Options` into safe cli strings
-    let safe_new_options = payload.options.to_string_map();
+    // Silently ignore restricted keys from payload
+    let safe_new_options = payload
+        .options
+        .into_iter()
+        .filter(|(key, _)| !RESTRICTED_ARIA2_KEYS.contains(&key.as_str()))
+        .map(|(key, value)| {
+            let text = match value {
+				// Extract raw string without quotes
+                Value::String(v) => v,
+				// Safely stringify numbers, bools
+                _ => value.to_string(),
+            };
+            (key, text)
+        })
+        .collect::<HashMap<String, String>>();
 
     // Delta modifications
     for (key, value) in safe_new_options {
@@ -2369,10 +2357,14 @@ pub async fn set_cmd_option(
     .execute(&state.db)
     .await;
 
+	// Restore all the dl to their state, after daemon starts
+	sleep(Duration::from_millis(1000)).await;
+	HistoryService::restore_dl(&state).await;
+
     (
         StatusCode::OK,
         Json(serde_json::json!({
-            "status": "daemonRestarted",
+            "status": "cmdOptionsUpdated",
             "message": "Aria2 daemon restarted with updated arguments."
         })),
     )
@@ -2876,27 +2868,6 @@ fn parse_aria2c_version_stdout(stdout: &str) -> Value {
     })
 }
 
-/// History sort impls
-impl SortBy {
-    pub fn to_sql_column(&self) -> &'static str {
-        match self {
-			// Cast as int for alphabetical sorting
-            SortBy::Size => "CAST(total_length AS INTEGER)",
-            SortBy::Name => "name COLLATE NOCASE",
-            SortBy::Time => "created_at",
-        }
-    }
-}
-
-impl Order {
-    pub fn to_sql_keyword(&self) -> &'static str {
-        match self {
-            Order::Asc => "ASC",
-            Order::Desc => "DESC",
-        }
-    }
-}
-
 fn his_fltr(
 	query: &mut QueryBuilder<Sqlite>,
 	status: Option<&str>,
@@ -3080,8 +3051,8 @@ pub async fn delete(
         })));
     }
 
-    // `forceRemove` first
-    let mut elgbl_for_res: Vec<String> = Vec::new();
+	// `forceRemove` first
+    let mut elgbl_res: Vec<String> = Vec::new();
 
     for chunk in gids.chunks(MAX_MULTICALL_BATCH) {
         let mut force_remove_batch = Vec::new();
@@ -3140,13 +3111,13 @@ pub async fn delete(
 			// - success array like ["gid"]
 			// - error object like {"code":1,"message":"..."}
 			// - other non-"cannot be removed now" failures
-			elgbl_for_res.push(gid);
+			elgbl_res.push(gid);
 		}
     }
 
     // `removeDownloadResult` only for the eligible set
-    if !elgbl_for_res.is_empty() {
-        for chunk in elgbl_for_res.chunks(MAX_MULTICALL_BATCH) {
+    if !elgbl_res.is_empty() {
+        for chunk in elgbl_res.chunks(MAX_MULTICALL_BATCH) {
             let mut remove_result_batch = Vec::new();
 
             for gid in chunk {
@@ -3166,8 +3137,8 @@ pub async fn delete(
     }
 
 
-    for gid in &elgbl_for_res {
-        if !elgbl_for_res.contains(gid) {
+    for gid in &elgbl_res {
+        if !elgbl_res.contains(gid) {
             warn!("Skipping DB deletion for GID {:?} because it was not freed from Aria2.", gid);
             continue;
         }
@@ -3280,7 +3251,7 @@ pub async fn delete(
 
     Ok(Json(json!({
 		"status": "deleted",
-		"deletionCount": elgbl_for_res.len()
+		"deletionCount": elgbl_res.len()
 	})))
 }
 
@@ -3437,6 +3408,8 @@ pub async fn purge_all(
     .into_iter()
     .flatten()
     .collect();
+
+	debug!("Purging GIDs: {:?}", gids);
 
     if gids.is_empty() {
 		return (

@@ -25,7 +25,7 @@ use super::types::{
 };
 
 const MPSC_CHANNEL: usize = 1024;
-const RPC_CALL_TIMEOUT: u64 = 1024;
+const RPC_CALL_TIMEOUT: u64 = 100;
 
 impl Aria2Client {
     pub fn new(
@@ -77,7 +77,7 @@ impl Aria2Client {
 					}
 				},
 				Err(_) => {
-					let err = format!("Aria2 RPC 100 sec timeout for method: {}", method);
+					let err = format!("Aria2 RPC {} sec timeout for method: {}", RPC_CALL_TIMEOUT, method);
 					error!("{}", err);
 					Err(err)
 				}

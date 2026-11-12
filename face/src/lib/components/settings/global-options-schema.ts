@@ -1468,7 +1468,7 @@ export const settingsSections: OptionSection[] = [
 				description: "Command to execute when download starts.",
 				type: "text",
 				target: "cmd",
-				placeholder: "/path/to/hook.sh"
+				placeholder: ""
 			},
 			{
 				key: "on-download-pause",
@@ -1476,7 +1476,7 @@ export const settingsSections: OptionSection[] = [
 				description: "Command to execute when download pauses.",
 				type: "text",
 				target: "cmd",
-				placeholder: "/path/to/hook.sh"
+				placeholder: ""
 			},
 			{
 				key: "on-download-stop",
@@ -1484,7 +1484,7 @@ export const settingsSections: OptionSection[] = [
 				description: "Command to execute when download stops.",
 				type: "text",
 				target: "cmd",
-				placeholder: "/path/to/hook.sh"
+				placeholder: ""
 			},
 			{
 				key: "on-download-complete",
@@ -1492,7 +1492,7 @@ export const settingsSections: OptionSection[] = [
 				description: "Command to execute when download completes.",
 				type: "text",
 				target: "cmd",
-				placeholder: "/path/to/hook.sh"
+				placeholder: ""
 			},
 			{
 				key: "on-download-error",
@@ -1500,7 +1500,7 @@ export const settingsSections: OptionSection[] = [
 				description: "Command to execute when download fails.",
 				type: "text",
 				target: "cmd",
-				placeholder: "/path/to/hook.sh"
+				placeholder: ""
 			},
 			{
 				key: "on-bt-download-complete",
@@ -1508,7 +1508,7 @@ export const settingsSections: OptionSection[] = [
 				description: "Command to execute when torrent completes.",
 				type: "text",
 				target: "cmd",
-				placeholder: "/path/to/hook.sh"
+				placeholder: ""
 			},
 
 			// Advanced Text & Networking

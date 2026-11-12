@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use std::sync::{atomic::{AtomicU64}, Arc };
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
+use crate::aria2::daemon::RESTRICTED_ARIA2_KEYS;
 
 /*
 	Those value are getting serialize are in `camelCase`
@@ -62,7 +63,7 @@ pub struct GidReq {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all="camelCase")]
 pub struct PauseReq {
-    pub gids: Option<Vec<String>>,
+    pub gids: Vec<String>,
     pub force_pause: Option<bool>,
 }
 
@@ -70,26 +71,45 @@ pub struct PauseReq {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all="camelCase")]
 pub struct ResumeReq {
-    pub gids: Option<Vec<String>>,
+    pub gids: Vec<String>,
 }
 
 /// Stop multiple dl
 #[derive(Deserialize, Debug)]
 #[serde(rename_all="camelCase")]
 pub struct StopReq {
-    pub gids: Option<Vec<String>>,
+    pub gids: Vec<String>,
     pub force_stop: Option<bool>,
 }
 
 /// Retry request
 #[derive(Deserialize, Debug)]
 pub struct RetryReq {
-    pub gid: String,
+    pub gid: Vec<String>,
 }
 
 /// Wrapper for aria2 options
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Aria2Options(pub serde_json::Map<String, Value>);
+
+impl Aria2Options {
+    pub fn merge(&mut self, other: Aria2Options) {
+        self.0.extend(other.0);
+    }
+
+    pub fn filter_restricted(&mut self) {
+        self.0.retain(|key, _| !RESTRICTED_ARIA2_KEYS.contains(&key.as_str()));
+    }
+}
+
+impl IntoIterator for Aria2Options {
+    type Item = (String, Value);
+    type IntoIter = <serde_json::Map<String, Value> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
 
 /// Set gid specific options
 #[derive(Deserialize, Debug)]
@@ -154,6 +174,27 @@ pub enum SortBy {
 pub enum Order {
 	Asc,
 	Desc
+}
+
+/// History sort impls
+impl SortBy {
+    pub fn to_sql_column(&self) -> &'static str {
+        match self {
+			// Cast as int for alphabetical sorting
+            SortBy::Size => "CAST(total_length AS INTEGER)",
+            SortBy::Name => "name COLLATE NOCASE",
+            SortBy::Time => "created_at",
+        }
+    }
+}
+
+impl Order {
+    pub fn to_sql_keyword(&self) -> &'static str {
+        match self {
+            Order::Asc => "ASC",
+            Order::Desc => "DESC",
+        }
+    }
 }
 
 /// Get history pagination

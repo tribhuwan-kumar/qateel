@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT gid\n        FROM download_history\n        WHERE user_id = ?\n          AND status IN ('paused')\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "gid",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7a337188643fde0581fb36ceb43f973e54e6a5ca2d6f7a51e75b08f11a892225"
+}

@@ -34,12 +34,11 @@ use crate::{
 			AdminChangePasswordReq,
 			User as AuthenticatedUser,
         },
+		auth::MIN_USERNAME_LENGTH,
 		auth::MIN_PASSWORD_LENGTH,
         auth::COOKIE_VAILDITY_DURATION,
     },
 };
-
-pub const MIN_USERNAME_LENGTH: usize = 6;
 
 pub fn validate_creds(cred: &str, len: usize) -> bool {
     cred.len() >= len && cred.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
@@ -102,7 +101,7 @@ pub async fn create_user(
             })),
         );
     }
-    if payload.password.clone().len() <= MIN_PASSWORD_LENGTH {
+    if payload.password.clone().len() < MIN_PASSWORD_LENGTH {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({

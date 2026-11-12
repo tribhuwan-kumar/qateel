@@ -592,6 +592,43 @@
 		}
 	}
 
+	const copyToClipboard = async (text: string): Promise<void> => {
+		// Check for modern API and secure context
+		if (navigator.clipboard && window.isSecureContext) {
+			try {
+				await navigator.clipboard.writeText(text);
+				return;
+			} catch (err) {
+				console.warn("Modern clipboard API failed, trying fallback:", err);
+			}
+		}
+
+		// Fallback method for older mobile browsers / HTTP connections
+		const textArea = document.createElement("textarea");
+		textArea.value = text;
+
+		// Prevent scrolling or layout shifts on mobile
+		textArea.style.position = "fixed";
+		textArea.style.top = "0";
+		textArea.style.left = "0";
+		textArea.style.opacity = "0";
+
+		document.body.appendChild(textArea);
+		textArea.focus();
+		textArea.select();
+
+		// Necessary trick for proper text selection in iOS Safari
+		textArea.setSelectionRange(0, 99999);
+
+		try {
+			document.execCommand("copy");
+		} catch (err) {
+			console.log("Copy failed:", err);
+		} finally {
+			document.body.removeChild(textArea);
+		}
+	};
+
 	$effect(() => {
 			const sidebar = useSidebar();
 		const savedMode = localStorage.getItem("mode-watcher-mode");
@@ -748,38 +785,55 @@
 </div>
 
 <Dialog.Root bind:open={deleteDialogOpen}>
-	<Dialog.Content class="sm:max-w-[500px] sm:min-h-[350px]">
-		<Dialog.Header>
-			<Dialog.Title>Confirm Delete</Dialog.Title>
-			<Dialog.Description>
-				Are you sure you want to delete this download?
-				<br /> this action cannot be undone.
-				<br /><br />
-			</Dialog.Description>
-		</Dialog.Header>
+  <Dialog.Content showCloseButton={false} class="sm:max-w-[500px] sm:min-h-[300px]">
+    <Dialog.Header>
+      <Dialog.Title>Confirm Delete</Dialog.Title>
+      <Dialog.Description>
+        Are you sure you want to delete this download?
+        <br/> this action cannot be undone.
+        <br/><br/>
+      </Dialog.Description>
+    </Dialog.Header>
 
-		<div class="flex flex-row gap-2">
-			<div class="w-4 h-6 mt-1 inline">
-				<Checkbox class="cursor-pointer" id="delete-with-files" bind:checked={deleteWithFiles} />
-			</div>
-			<div class="inline">
-				<Label for="delete-with-files" class="cursor-pointer">Delete files too!?</Label>
-				<br />
-				<span class="text-[14px] font-normal text-muted-foreground"
-					>be careful, it'll delete their actual content from server!!</span
-				>
-			</div>
-		</div>
+    <div class="flex flex-row gap-2">
+      <div class="w-4 h-6 mt-1 inline">
+        <Checkbox
+          class="cursor-pointer"
+          id="delete-with-files"
+          bind:checked={deleteWithFiles}
+        />
+      </div>
+      <div class="inline">
+        <Label
+          for="delete-with-files"
+          class="cursor-pointer"
+        >
+          Delete files too!?
+        </Label>
+				<br/>
+        <span class="text-[14px] font-normal text-muted-foreground">be careful, it'll delete their actual content from server!!</span>
+      </div>
+    </div>
 
-		<Dialog.Footer class="mt-2">
-			<Button class="cursor-pointer" variant="outline" onclick={() => (deleteDialogOpen = false)}>
-				Cancel
-			</Button>
-			<Button class="min-w-24 cursor-pointer" variant="destructive" onclick={confirmDeletion}>
-				Delete
-			</Button>
-		</Dialog.Footer>
-	</Dialog.Content>
+    <Dialog.Footer
+      class="mt-2"
+    >
+      <Button
+        class="cursor-pointer"
+        variant="outline"
+        onclick={() => deleteDialogOpen = false}
+      >
+        Cancel
+      </Button>
+      <Button
+        class="min-w-24 cursor-pointer"
+        variant="destructive"
+        onclick={confirmDeletion}
+      >
+        Delete
+      </Button>
+    </Dialog.Footer>
+  </Dialog.Content>
 </Dialog.Root>
 
 
@@ -1000,7 +1054,7 @@
 									<!-- speeds only when active or seeding -->
 									{#if item.status !== "complete" && ['active', 'seeding'].includes(item.status)}
 										{#if item.downloadSpeed && item.downloadSpeed !== "0"}
-											<span class="flex flex-row">
+											<span class="flex flex-row items-center">
 												<HugeiconsIcon
 													icon={ArrowDown02Icon}
 													size={14}
@@ -1013,7 +1067,7 @@
 										{/if}
 										{#if item.uploadSpeed && item.uploadSpeed !== "0"}
 											|
-											<span class="flex flex-row">
+											<span class="flex flex-row items-center">
 												<HugeiconsIcon
 													icon={ArrowDown02Icon}
 													size={14}
@@ -1060,7 +1114,8 @@
 									{/if}
 									<!-- status -->
 									{#if item.status && item.status !== null}
-										{#if item.status && item.status !== null && item.totalLength && item.totalLength !== "0" && item.completedLength && item.completedLength !== "0"}
+										{#if item.status && item.status !== null&& !['active', 'seeding'].includes(item.status)  && item.totalLength
+											&& item.totalLength !== "0" && item.completedLength && item.completedLength !== "0"}
 											&nbsp; | &nbsp;
 										{/if}
 										<span>
@@ -1178,7 +1233,6 @@
 					{/if}
 					{#if ["error", "stopped", "removed"].includes(item.status)}
 						<DropdownMenu.Item
-							title="Retry to error"
 							onclick={() => handleRetry(item)}
 							class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
 								pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
@@ -1197,7 +1251,6 @@
 					{/if}
 					{#if ["active", "waiting"].includes(item.status)}
 						<DropdownMenu.Item
-							title="Stop from downloading"
 							onclick={() => handleStop(item)}
 							class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
 								pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
@@ -1207,7 +1260,6 @@
 					{/if}
 					{#if ["active", "seeding", "waiting", "paused"].includes(item.status)}
 						<DropdownMenu.Item
-							title="Change options"
 							onclick={() => {}}
 							class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
 								pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
@@ -1217,7 +1269,6 @@
 					{/if}
 					{#if ["error", "stopped"].includes(item.status)}
 						<DropdownMenu.Item
-							title="Set options"
 							onclick={() => {}}
 							class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
 								pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
@@ -1253,7 +1304,7 @@
 					{/if}
 					{#if item.kind === "uri" || item.sourceUri?.startsWith("magnet")}
 						<DropdownMenu.Item
-							onclick={() => navigator.clipboard.writeText(item.sourceUri!)}
+							onclick={async () => await copyToClipboard(item.sourceUri!)}
 							class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
 								pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
 						>
@@ -1261,9 +1312,9 @@
 						</DropdownMenu.Item>
 					{/if}
 					<DropdownMenu.Item
-						onclick={() => {
+						onclick={async () => {
 							let filesArr = JSON.parse(item.files!);
-							navigator.clipboard.writeText(filesArr[0].replace(/\.$/, ""))
+							await copyToClipboard(filesArr[0].replace(/\.$/, ""))
 						}}
 						class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
 							pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
@@ -1271,7 +1322,7 @@
 						Copy path
 					</DropdownMenu.Item>
 					<DropdownMenu.Item
-						onclick={() => navigator.clipboard.writeText(item.gid)}
+						onclick={async () => copyToClipboard(item.gid)}
 						class="flex hover:rounded-xl items-center px-2 py-1.5 rounded-md
 							pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
 					>

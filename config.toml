@@ -8,11 +8,11 @@ cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
 [aria2]
 port = "6800"
-secret = "foobar"
+secret = "foobar"										# recommended to set
 host = "ws://127.0.0.1"							# with prefix
-dir = "/home/trash/Downloads/aria2/"
-rpc_user = ""
-rpc_passwd = ""
+dir = "/mnt/heap/media/aria2"
+rpc_user = ""												# deprecated
+rpc_passwd = ""											# deprecated
 
 [tls]
 key = ""

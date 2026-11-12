@@ -33,6 +33,7 @@ use super::types::{
 type HmacSha256 = Hmac<Sha256>;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 
+pub const MIN_USERNAME_LENGTH: usize = 6;
 pub const MIN_PASSWORD_LENGTH: usize = 8;
 pub const COOKIE_VAILDITY_DURATION: usize = 24 * 60 * 60 * 15;
 

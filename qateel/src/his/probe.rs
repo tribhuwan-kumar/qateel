@@ -16,6 +16,7 @@ use serde_json::{json};
 use tokio::sync::RwLock;
 use std::net::TcpListener;
 use tokio::time::{sleep, Duration, Instant};
+use crate::utils;
 use crate::{
 	app::AppState,
 	his::extract::Extraction,
@@ -329,14 +330,14 @@ pub async fn probe_http_uris(
 }
 
 
-/// Get magnet metadata
+/// Get magnet metadata, by another aria2 process
 pub async fn probe_magnets(
     state: &AppState,
     user_id: &str,
     items: Vec<MagnetProbeItem>,
 ) -> Vec<Result<UriMeta, (String, UriMeta)>> {
     let mut results: Vec<Option<Result<UriMeta, (String, UriMeta)>>> = vec![None; items.len()];
-    let torrent_dir = state.config.data_dir.join("torrents");
+	let torrent_dir = state.config.data_dir.join("torrents");
 
     if let Err(e) = tokio::fs::create_dir_all(&torrent_dir).await {
         error!("Failed to create torrents directory: {:?}", e);
@@ -380,8 +381,7 @@ pub async fn probe_magnets(
         };
 
         if let Some(ref hash) = item.info_hash {
-            let file_name = format!("{}-{}.torrent", user_id, hash);
-            let torrent_path = torrent_dir.join(&file_name);
+			let torrent_path = utils::get_torrent_path(&state.config.data_dir, user_id, hash);
 
             if torrent_path.exists() {
                 // Already downloaded, read size directly without spawning aria2c
@@ -603,6 +603,7 @@ pub async fn probe_magnets(
 
                         if status.eq_ignore_ascii_case("complete") {
                             if let Some(ref hash) = item.info_hash {
+								// Rename the complete resolved magnets
                                 let orig_path = torrent_dir.join(format!("{}.torrent", hash));
                                 let target_path = torrent_dir.join(format!("{}-{}.torrent", user_id, hash));
 

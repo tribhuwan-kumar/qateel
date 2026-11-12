@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from "svelte";
+	import { get } from 'svelte/store';
 	import { mode } from "mode-watcher";
-	import { toast } from "svelte-sonner";
   import { formatSpeed, formatBytes } from "$lib/utils";
   import { systemState } from '$lib/system';
 	import { historySort, loadHistorySort } from "$lib/sort";
@@ -42,9 +42,7 @@
     Delete02Icon,
 		PlusSignIcon,
 		Sorting05Icon,
-		ArrowUp04Icon,
 		FloppyDiskIcon,
-		ArrowDown04Icon,
 		CancelSquareIcon,
     ArrowUpDoubleIcon,
     ArrowDownDoubleIcon,
@@ -173,6 +171,7 @@
       sortBy: tempSortBy,
       order: tempOrder,
     });
+		console.log("History sort:", get(historySort));
     sortMenuOpen = false;
   }
 
@@ -182,6 +181,7 @@
       sortBy: tempSortBy,
       order: tempOrder,
     });
+		console.log("History sort:", get(historySort));
     sortMenuOpen = false;
   }
 
@@ -233,29 +233,6 @@
     tempOrder = value.order;
   }
 
-	// async function handleStopAll() {
-	// 	if (hasSelection) {
-	// 		clearSelection();
-	// 		return;
-	// 	}
-	// 	// If local items already contain everything, use them immediately
-	// 	if (aria2Store.items.length > 0) {
-	// 		const allItems = await aria2.getAllHistory("all", "everything");
-	// 		const targetItems = allItems.length > 0 ? allItems : aria2Store.items;
-	// 		const pauseableItems = targetItems.filter(i => ['active', 'waiting'].includes(i.status));
-	// 		if (pauseableItems.length > 0) {
-	// 			const gids = pauseableItems.map(i => (i.gid));
-	// 			// Do the `forcePause`
-	// 			await aria2.pause(gids, true);
-	// 		} else {
-	// 			toast.info(`No active or waiting gid to pause!!`, {
-	// 				richColors: true,
-	// 				style: "cursor: pointer;"
-	// 			});
-	// 		}
-	// 	}
-	// }
-
   onMount(() => {
     syncTheme();
     const saved = loadHistorySort();
@@ -286,7 +263,7 @@
 <div class="bg-background/95 backdrop-blur z-10 supports-backdrop-filter:bg-background/90
 	dark:supports-backdrop-filter:bg-background/60 sticky top-0 w-full"
 >
-	<div class="inline-flex flex-row">
+	<div class="inline-flex h-full items-center flex-row">
 		<SidebarUI.Trigger
 			class={`m-2 sm:hidden text-muted-foreground bg-background/95 backdrop-blur
 				dark:supports-backdrop-filter:bg-background/60 supports-backdrop-filter:bg-background/90 sticky top-0
@@ -297,7 +274,45 @@
 				dark:supports-backdrop-filter:bg-background/60 supports-backdrop-filter:bg-background/90 sticky top-0
 				cursor-pointer`}
 		/>
+		<!-- For desktop -->
 		<div class="hidden sm:inline-flex justify-start float-left md:h-12 items-center md:px-4 gap-2">
+			<div class="flex items-center gap-4 text-sm text-muted-foreground">
+				{#if globalStats.downloadSpeed !== "0" || globalStats.uploadSpeed !== "0"}
+					<Badge
+						variant="outline"
+						onclick={openGlobalStatsDialog}
+						title="Global downloading speed"
+						class="gap-1 px-2 py-3.5 min-w-26 cursor-pointer text-xs animate-in fade-in zoom-in duration-200"
+					>
+						{#if globalStats.downloadSpeed !== "0"}
+							<HugeiconsIcon
+								icon={ArrowDownDoubleIcon}
+								size={24}
+								color="currentColor"
+								strokeWidth={2}
+								class="w-8! h-8!"
+							/>
+							{formatSpeed(globalStats.downloadSpeed)}
+						{/if}
+						{#if globalStats.uploadSpeed !== "0"}
+							<div class="w-px h-5 mx-2 bg-border"></div>
+								<HugeiconsIcon
+									icon={ArrowUpDoubleIcon}
+									size={24}
+									color="currentColor"
+									strokeWidth={1.5}
+								/>
+							{formatSpeed(globalStats.uploadSpeed)}
+						{/if}
+					</Badge>
+				{/if}
+			</div>
+		</div>
+
+		<!-- For mobile -->
+		<div
+			class={`sm:hidden justify-start float-left md:h-12 items-center md:px-4 gap-2 ${hasSelection ? "hidden" : ""}`}
+		>
 			<div class="flex items-center gap-4 text-sm text-muted-foreground">
 				{#if globalStats.downloadSpeed !== "0" || globalStats.uploadSpeed !== "0"}
 					<Badge
@@ -355,7 +370,7 @@
 						</span>
 						{#if $selectedTotalBytes > 0}
 							{const totalLength = formatBytes(String($selectedTotalBytes))}
-							<span class="opacity-75 font-normal text-[12px] sm:text-xs">
+							<span class="opacity-75 font-normal text-[11px] sm:text-xs">
 								({totalLength})
 							</span>
 						{/if}
@@ -443,70 +458,9 @@
 		<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div
 			title="Sort by"
-			onclick={() => (sortMenuOpen = !sortMenuOpen)}
 			bind:this={sortMenuRef}
-      class="cursor-pointer! p-2 max-sm:hidden rounded-full disabled:cursor-not-allowed! relative hover:bg-muted hover:text-foreground dark:hover:bg-muted/50 aria-expanded:bg-muted aria-expanded:text-foreground"
-    >
-      <HugeiconsIcon
-        icon={Sorting05Icon}
-        class="text-muted-foreground w-4! h-4!"
-        strokeWidth={2}
-      />
-			{#if sortMenuOpen}
-				<div
-					class="py-2 gap-x-2 px-2 top-10 text-foreground/95 text-[14px] z-10 inline-flex flex-row justify-center absolute rounded-xl border border-sidebar-border/80 bg-background/95 dark:bg-background/90
-						supports-backdrop-filter:bg-background/90 dark:supports-backdrop-filter:bg-background/90 backdrop-blur-3xl"
-					style="left: 50%; transform: translate(-50%, 0%);  width: 150px;"
-				>
-					<div class="w-[75%] gap-2 flex flex-col">
-						{#each sortOptions as option (option)}
-							<button
-								type="button"
-								onclick={() => selectSort(option.key)}
-								class={[
-									"flex h-full p-1.5 w-full cursor-pointer flex-row gap-2 items-center rounded-xl transition-colors",
-									tempSortBy === option.key ? "highlight-field" : ""
-								].join(" ")}
-							>
-								<HugeiconsIcon
-									icon={option.key === "time" ? Time04Icon : option.key === "name" ? AlphaIcon : FloppyDiskIcon}
-									class="text-foreground/95 w-4! h-4!"
-									strokeWidth={2}
-								/>
-								<span>{option.label}</span>
-							</button>
-						{/each}
-					</div>
-					<div
-						class="h-[inherit]! w-[25%] px-1 flex items-center highlight-field rounded-xl"
-						title="Toggle ascending or descending"
-					>
-						<button
-							title={tempOrder === "asc" ? "Descending" : "Ascending"}
-							onclick={toggleOrder}
-							aria-label={tempOrder === "asc" ? "Switch to descending" : "Switch to ascending"}
-							class={["w-full h-full flex items-center justify-center cursor-pointer rounded-lg transition-all",].join(" ")}
-						>
-							<img
-								aria-hidden="true"
-								src={getVisibleOrderAsset()}
-								alt={tempOrder === "asc" ? "switch to descending" : "switch to ascending"}
-								class="w-full h-[100%] sm:w-7 xs:w-6 shrink-0 object-contain"
-							/>
-						</button>
-					</div>
-				</div>
-			{/if}
-    </div>
-
-		<!-- For mobile -->
-		<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-    <div
-			title="Sort by"
 			onclick={() => (sortMenuOpen = !sortMenuOpen)}
-			bind:this={sortMenuRef}
-      class={`cursor-pointer! p-2 sm:hidden rounded-full disabled:cursor-not-allowed! relative hover:bg-muted hover:text-foreground
-				dark:hover:bg-muted/50 aria-expanded:bg-muted aria-expanded:text-foreground ${hasSelection ? "hidden" : ""}`}
+      class={["cursor-pointer! p-2 rounded-full disabled:cursor-not-allowed! relative hover:bg-muted hover:text-foreground dark:hover:bg-muted/50 aria-expanded:bg-muted aria-expanded:text-foreground", hasSelection && "max-sm:hidden"]}
     >
       <HugeiconsIcon
         icon={Sorting05Icon}
@@ -801,7 +755,7 @@
 				</DropdownMenu.Item>
 				<DropdownMenu.Separator />
 				<DropdownMenu.Item
-					title="Stop all downloads"
+					title="Stop all complete, error, stopped downloads"
 					class="flex hover:rounded-xl items-center px-2 py-1.5 gap-x-1 rounded-md
 						pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
 					onclick={async () => {
@@ -817,7 +771,7 @@
 				</DropdownMenu.Item>
 				<DropdownMenu.Separator />
 				<DropdownMenu.Item
-					title="Purge all completed, error, removed downloads"
+					title="Purge all complete, error, removed downloads"
 					class="flex hover:rounded-xl items-center px-2 py-1.5 gap-x-1 rounded-md
 						pointer-events-auto cursor-pointer hover:bg-muted-foreground/10! hover:text-primary!"
 					onclick={async () => {
@@ -936,7 +890,7 @@
 					</table>
 				</div>
 			{:else}
-				<div class="min-h-[200px] overflow-x-scroll overflow-y-scroll z-100 json-class overflow-auto rounded-xl border bg-muted/40 p-4 text-xs">
+				<div class="min-h-[200px] overflow-x-scroll overflow-y-scroll z-100 json-class text-xs sm:text-sm overflow-auto rounded-xl border bg-muted/40 p-4">
 					<JsonView
 						json={globalStats}
 					/>
@@ -948,7 +902,6 @@
 <style>
   .json-class {
     font-family: monospace;
-    font-size: 14px;
     --jsonBorderLeft: 1px solid var(--color-muted-foreground);
     --jsonValColor: var(--color-muted-foreground);
 		--jsonBracketColor: var(--bg-muted);

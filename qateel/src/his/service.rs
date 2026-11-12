@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use tokio::sync::broadcast;
 use std::collections::HashSet;
 use std::collections::HashMap;
+use axum::extract::ws::Utf8Bytes;
 use tokio::time::{sleep, Duration};
 use notify_debouncer_full::{
 	new_debouncer,
@@ -20,6 +21,7 @@ use super::{
 };
 
 use crate::{
+	utils,
     AppState,
 	aria2::proxy::MAX_MULTICALL_BATCH,
     aria2::types::{
@@ -77,9 +79,7 @@ impl HistoryService {
 										Self::handle_event(&state_cln, slice::from_ref(&gid), Some(GidStatus::Stopped)).await;
 									} else if method == "aria2.onDownloadStart" {
 										let already_alive = state_cln.active_tasks.tasks.read().await.contains_key(&gid);
-										if !already_alive {
-											Self::refresh_gid(&state_cln, gid).await;
-										}
+										if !already_alive { Self::refresh_gid(&state_cln, gid).await; }
 									} else if method.starts_with("aria2.on") {
 										debug!("Updating event {:?} for gid {:?}", method, gid);
 										Self::refresh_gid(&state_cln, gid).await;
@@ -117,10 +117,10 @@ impl HistoryService {
 	/// Stream stuff
     async fn tick(state: &AppState) {
 		// Send stas
-        let global_stat = match state.aria2.call("aria2.getGlobalStat", vec![]).await {
-            Ok(json) => serde_json::from_value::<GlobalStat>(json).unwrap_or_default(),
-            Err(_) => return,
-        };
+        // let global_stat = match state.aria2.call("aria2.getGlobalStat", vec![]).await {
+        //     Ok(json) => serde_json::from_value::<GlobalStat>(json).unwrap_or_default(),
+        //     Err(_) => return,
+        // };
 
 		let (gids, user_ids): (Vec<String>, HashSet<String>) = {
 			let tasks_guard = state.active_tasks.tasks.read().await;
@@ -144,11 +144,30 @@ impl HistoryService {
 		}
 
         // Publish global stat per user in the current active set
-		for user_id in user_ids {
-			let _ = state.global_tx.send(GlobalStatWsMessage::Global {
-				user_id,
-				data: global_stat.clone(),
-			});
+		// for user_id in user_ids {
+		// 	let _ = state.global_tx.send(GlobalStatWsMessage::Global {
+		// 		user_id,
+		// 		data: global_stat.clone(),
+		// 	});
+		// }
+		if !state.user_hubs.is_empty() {
+			if let Ok(json) = state.aria2.call("aria2.getGlobalStat", vec![]).await {
+				let global_stat = serde_json::from_value::<GlobalStat>(json).unwrap_or_default();
+				// Serialize ONCE with a dummy empty user_id
+				let msg = GlobalStatWsMessage::Global {
+					user_id: String::new(),
+					data: global_stat,
+				};
+
+				if let Ok(json_str) = serde_json::to_string(&msg) {
+					let shared_payload = Utf8Bytes::from(json_str);
+
+					// Zero copy buffer to every connected user hub
+					for entry in state.user_hubs.iter() {
+						let _ = entry.value().global_tx.send(shared_payload.clone());
+					}
+				}
+			}
 		}
 
         // Get details of gid
@@ -210,12 +229,14 @@ impl HistoryService {
 								let meta = ItemMetaData::extract(res, gid);
 
 								if let Some((user_id, tick_task)) = state.active_tasks
-									.upsert_tick(gid, meta, upload_speed, download_speed, num_seeders, connections) .await
+									.upsert_tick(gid, meta, upload_speed, download_speed, num_seeders, connections).await
 								{
-									updates_by_user
-										.entry(user_id)
-										.or_default()
-										.push(tick_task.clone());
+									if state.user_hubs.contains_key(&user_id) {
+										updates_by_user
+											.entry(user_id)
+											.or_default()
+											.push(tick_task.clone());
+									}
 
 									state.progress_buf.add_update(tick_task).await;
 								} else {
@@ -250,7 +271,7 @@ impl HistoryService {
                         tasks,
                     };
 
-                    let _ = state.history_tx.send(msg);
+					state.emit_dl(&msg);
                 }
 
 				// Evict terminal tasks, persist their final status to db & spawn content hasher
@@ -477,7 +498,7 @@ impl HistoryService {
         info!("Sync complete...");
     }
 
-    /// Refresh gid in db, calling when needed
+    /// Refresh gid according to new `tellStatus` in db
     pub async fn refresh_gid(state: &AppState, gid: String) {
         info!("Refreshing gid: {:?}", gid);
         let params = vec![serde_json::json!(gid)];
@@ -612,7 +633,7 @@ impl HistoryService {
                     data: vec![meta],
                 };
 
-                let _ = state.history_tx.send(msg);
+				state.emit_dl(&msg);
             },
             Ok(None) => {
                 debug!("Received aria2 update for unknown gid: {:?}, download: {:?} weird error", meta.gid, meta.name);
@@ -654,7 +675,7 @@ impl HistoryService {
 			GidStatus::Seeding => "seeding",
 		});
 
-		for chunk in gids.chunks(MAX_MULTICALL_BATCH) {
+		for gid in gids {
 			let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
         	    "UPDATE download_history SET status = COALESCE("
 			);
@@ -663,9 +684,7 @@ impl HistoryService {
 
         	let mut separated = qb.separated(", ");
 
-        	for gid in chunk {
-				separated.push_bind(gid);
-			}
+			separated.push_bind(gid);
 
 			separated.push_unseparated( ") RETURNING
 				gid,
@@ -720,7 +739,7 @@ impl HistoryService {
 							data: items,
 						};
 
-						let _ = state.history_tx.send(msg);
+						state.emit_dl(&msg);
 					}
 
 				}
@@ -824,7 +843,7 @@ impl HistoryService {
         }
     }
 
-	async fn bootstrap_global_options(state: &AppState) {
+	pub async fn bootstrap_global_options(state: &AppState) {
         if let Ok(Some(global_record)) = sqlx::query!(
             "SELECT value FROM settings WHERE key = 'aria2_global_options' ORDER BY updated_at DESC LIMIT 1"
         )
@@ -843,6 +862,7 @@ impl HistoryService {
 	}
 
 	#[allow(unused)]
+	/// Restoring dls will restore the gid options too, useless
 	async fn bootstrap_gid_options(state: &AppState) {
         let records = sqlx::query!(
             r#"
@@ -894,7 +914,8 @@ impl HistoryService {
         }
 	}
 
-	async fn bootstrap_cmd_options(state: &AppState) {
+	/// CMD options are global options
+	pub async fn bootstrap_cmd_options(state: &AppState) {
 		let saved_cmd_args = match sqlx::query!(
 				"SELECT value FROM settings WHERE key = 'aria2_cmd_options' ORDER BY updated_at DESC LIMIT 1"
 			)
@@ -913,7 +934,7 @@ impl HistoryService {
 		}
 	}
 
-	async fn restore_dl(state: &AppState) {
+	pub async fn restore_dl(state: &AppState) {
         info!("Restoring interrupted downloads into Aria2...");
         // Fetch  active, waiting, paused, seeding  downloads, including kind and info_hash
 		let records: Vec<ItemMetaData> = sqlx::query_as!(
@@ -1007,9 +1028,7 @@ impl HistoryService {
 					// `user_id-info_hash.torrent` format
 					// Most likely there would be a info hash,
 					// If it panics, it panics
-					let torrent_path = state.config.data_dir
-							.join("torrents")
-							.join(format!("{}-{}.torrent", row.user_id, row.info_hash.clone().unwrap()));
+					let torrent_path = utils::get_torrent_path(&state.config.data_dir, row.user_id.clone(), &row.info_hash.clone().unwrap());
 
 					if torrent_path.exists() {
 						if let Ok(bytes) = tokio::fs::read(&torrent_path).await {
@@ -1081,7 +1100,7 @@ impl HistoryService {
 
     /// Watch aria2 dir for deleted and moved files and mark matching history entries as 'removed'.
     /// For each filesystem event (remove or rename-from), look for entries in `download_history`
-    /// That match filename & dir and call handle_event to set status to 'removed'.
+    /// That match filename & dir and call `handle_event` to set status to 'removed'.
 	/// This watcher can only watch the global aria2 download dir,
 	/// Gid with specified `dir` options can't be watched, that'd be tough
 	pub async fn watch_aria2_dir(state: AppState) {

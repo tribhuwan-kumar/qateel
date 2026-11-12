@@ -461,6 +461,10 @@ export class Aria2Manager {
   //   }
   // }
 
+	async retryAll()  {
+
+	}
+
 	/**
 		* Submits finalized tasks to Aria2 after the user
 		* has reviewed the preflight data.
